@@ -55,45 +55,43 @@ with block:
     access_logs_state = gr.State(access_logs_folder + 'log.csv')
     access_s3_logs_loc_state = gr.State(access_logs_folder)
     usage_logs_state = gr.State(usage_logs_folder + 'log.csv')
-    usage_s3_logs_loc_state = gr.State(usage_logs_folder)    
+    usage_s3_logs_loc_state = gr.State(usage_logs_folder)   
 
     gr.Markdown(
     """
     # Address matcher
-    Match single or multiple addresses to the reference address file of your choice. Fuzzy matching should work on any address columns as long as you specify the postcode column at the end. The neural network component only activates with the in-house neural network model - contact me for details if you have access to AddressBase already.The neural network component works with LLPG files in the LPI format.
+    Match single or multiple addresses to the reference address file of your choice. *Please note that a postcode column is required for matching*. Fuzzy matching should work on any address columns as long as you specify the postcode column at the end. The neural network component only activates with the in-house neural network model - contact me for details if you have access to AddressBase already. The neural network component works with LLPG files in the LPI format.
     
-    The tool can accept csv, xlsx (with one sheet), and parquet files. You
-     need to specify the address columns of the file to match specifically in the address column area with postcode at the end. 
+    The tool can accept csv, xlsx (with one sheet), and parquet files. You need to specify the address columns of the file to match specifically in the address column area with postcode at the end. 
     
-    Use the 'New Column' button to create a new cell for each column name. After you have chosen a reference file, an address match file, and specified its address columns (plus postcode), you can press 'Match addresses' to run the tool.
-    """)
+    Use the 'New Column' button to create a new cell for each column name. After you have chosen a reference file, an address match file, and specified its address columns (plus postcode), you can press 'Match addresses' to run the tool.""")
 
     with gr.Tab("Match addresses"):
-
-        with gr.Accordion("Quick check - single address", open = True):
-            in_text = gr.Textbox(label="Input a single address as text")
     
-        with gr.Accordion("I have multiple addresses", open = False):
+        with gr.Accordion("I have multiple addresses in a CSV/XLSX/Parquet file", open = True):
             in_file = gr.File(label="Input addresses from file", file_count= "multiple")
             in_colnames = gr.Dropdown(value=[], choices=[], multiselect=True, label="Select columns that make up the address. Make sure postcode is at the end")
             in_existing = gr.Dropdown(value=[], choices=[], multiselect=False, label="Select columns that indicate existing matches.")
+
+        with gr.Accordion("Quick check - single address", open = False):
+            in_text = gr.Textbox(label="Input a single address as text")
         
         
         gr.Markdown(
         """
         ## Choose reference file / call API
-        Upload a reference file to match against, or alternatively call the Addressbase API (requires API key). Fuzzy matching will work on any address format, but the neural network will only work with the LLPG LPI format, e.g. with columns SaoText, SaoStartNumber etc.. This joins on the UPRN column. If any of these are different for you, 
-        open 'Custom reference file format or join columns' below.
+        Upload a reference file to match against, or alternatively call the Addressbase API (requires API key). Fuzzy matching will work on any address format, but the neural network will only work with the LLPG LPI format, e.g. with columns SaoText, SaoStartNumber etc.. This joins on the UPRN column. If any of these are different for you, open 'Custom reference file format or join columns' below.
         """)
 
-        with gr.Accordion("Use Addressbase API (instead of reference file)", open = True):
+        with gr.Accordion("Use Addressbase API (instead of reference file)", open = False):
             in_api = gr.Dropdown(label="Choose API type", multiselect=False, value=None, choices=["Postcode"])#["Postcode", "UPRN"]) #choices=["Address", "Postcode", "UPRN"])
             in_api_key = gr.Textbox(label="Addressbase API key", type='password', value = ADDRESSBASE_API_KEY)
 
-        with gr.Accordion("Match against reference file of addresses", open = False):
+
+        with gr.Accordion("Match against reference list of addresses in a CSV/XLSX/Parquet file", open = True):
             in_ref = gr.File(label="Input reference addresses from file", file_count= "multiple")
         
-        with gr.Accordion("Custom reference file format or join columns (i.e. not LLPG LPI format)", open = False):
+        with gr.Accordion("Custom reference file format or join columns (if not LLPG/Addressbase format with columns SaoText, SaoStartNumber etc.)", open = False):
             in_refcol = gr.Dropdown(value=[], choices=[], multiselect=True, label="Select columns that make up the reference address. Make sure postcode is at the end")
             in_joincol = gr.Dropdown(value=[], choices=[], multiselect=True, label="Select columns you want to join on to the search dataset")
         
