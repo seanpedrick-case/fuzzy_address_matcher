@@ -3,6 +3,10 @@ from typing import Type, Dict, List, Tuple
 from datetime import datetime
 #import polars as pl
 import re
+from tqdm import tqdm
+from gradio import Progress
+
+tqdm.pandas()  # Registers the progress_apply method
 
 PandasDataFrame = Type[pd.DataFrame]
 PandasSeries = Type[pd.Series]
@@ -54,8 +58,11 @@ def prepare_search_address(
     search_df: pd.DataFrame, 
     address_cols: list,
     postcode_col: list,
-    key_col: str
+    key_col: str,
+    progress = Progress(track_tqdm=True)
 ) -> Tuple[pd.DataFrame, str]:
+    
+    progress(0, "Preparing search address column")
     
     # Validate inputs
     if not isinstance(search_df, pd.DataFrame):
@@ -68,56 +75,64 @@ def prepare_search_address(
         raise TypeError("postcode_col must be a list")
         
     if not isinstance(key_col, str):
-        raise TypeError("key_col must be a string")
-        
-    # Clean address columns
-    #search_df_polars = pl.from_dataframe(search_df)
-    clean_addresses = _clean_columns(search_df, address_cols)
+        raise TypeError("key_col must be a string")   
 
     # If there is a full address and postcode column in the addresses, clean any postcodes from the first column
     if len(address_cols) == 2:
         # Remove postcode from address
-        address_series = remove_postcode(clean_addresses, address_cols[0])
-        clean_addresses[address_cols[0]] = address_series
+        search_df[address_cols[0]] = remove_postcode(search_df, address_cols[0])
     
     # Join address columns into one
-    full_addresses = _join_address(clean_addresses, address_cols)
+    full_addresses = _join_address(search_df, address_cols)
+
+    # Clean address columns
+    #search_df_polars = pl.from_dataframe(search_df)
+    clean_addresses = _clean_columns(full_addresses, ["full_address"])
     
     # Add postcode column 
-    full_df = _add_postcode_column(full_addresses, postcode_col)
+    full_df = _add_postcode_column(clean_addresses, postcode_col)
     
     # Remove postcode from main address if there was only one column in the input
     if postcode_col == "full_address_postcode":
         # Remove postcode from address
-        address_series = remove_postcode(search_df, "full_address")
-        search_df["full_address"] == address_series
-    
+        full_df["full_address"] = remove_postcode(full_df, "full_address")    
+
     # Ensure index column
     final_df = _ensure_index(full_df, key_col)
-
-    #print(final_df)
-
     
     return final_df
 
 # Helper functions
-def _clean_columns(df, cols):
-   # Cleaning logic
-   def clean_col(col):
-       return col.astype(str).fillna("").infer_objects(copy=False).str.replace("nan","").str.replace("\s{2,}", " ", regex=True).str.replace(","," ").str.strip()
+def _clean_columns(df:PandasDataFrame, cols:List[str]):
+    # Cleaning logic
+    def clean_col(col):
+       return (
+           col.astype(str)
+           .fillna("")
+           .infer_objects(copy=False)
+           .str.replace("nan", "")
+           .str.replace(r"\bNone\b", "", case=False, regex=True)
+           .str.replace(r"\s{2,}", " ", regex=True)
+           .str.replace(",", " ")
+           .str.replace(r"[\r\n]+", " ", regex=True)  # Replace line breaks with spaces
+           .str.strip()
+           # Remove duplicate two words at the end if present
+           .str.replace(r'(\b\w+\b\s+\b\w+\b)\s+\1$', r'\1', regex=True)
+       )
 
-   df[cols] = df[cols].apply(clean_col)
-    
-   return df
+    for col in tqdm(cols, desc="Cleaning columns"):
+        df[col] = clean_col(df[col])
+
+    return df
  
-def _join_address(df, cols):
+def _join_address(df:PandasDataFrame, cols:List[str]):
    # Joining logic
    full_address = df[cols].apply(lambda row: ' '.join(row.values.astype(str)), axis=1)
    df["full_address"] = full_address.str.replace("\s{2,}", " ", regex=True).str.strip()
    
    return df
    
-def _add_postcode_column(df, postcodes):
+def _add_postcode_column(df:PandasDataFrame, postcodes:str):
    # Add postcode column
    if isinstance(postcodes, list):
         postcodes = postcodes[0]
@@ -133,7 +148,7 @@ def _add_postcode_column(df, postcodes):
    
    return df
    
-def _ensure_index(df, index_col):
+def _ensure_index(df:PandasDataFrame, index_col:str):
    # Ensure index column exists
    if ((index_col == "index") & ~("index" in df.columns)):
         print("Resetting index in _ensure_index function")   
@@ -143,7 +158,7 @@ def _ensure_index(df, index_col):
 
    return df
 
-def create_full_address(df):
+def create_full_address(df:PandasDataFrame):
 
     df = df.fillna("").infer_objects(copy=False)
 
@@ -169,8 +184,10 @@ def create_full_address(df):
     
     return df["full_address"]
 
-def prepare_ref_address(ref_df, ref_address_cols, new_join_col = [], standard_cols = True):
+def prepare_ref_address(ref_df:PandasDataFrame, ref_address_cols:List[str], new_join_col = [], standard_cols = True, progress=Progress(track_tqdm=True)):
     
+    progress(0, "Preparing reference address")
+
     if ('SaoText' in ref_df.columns) | ("Secondary_Name_LPI" in ref_df.columns): standard_cols = True
     else: standard_cols = False
     
@@ -182,6 +199,8 @@ def prepare_ref_address(ref_df, ref_address_cols, new_join_col = [], standard_co
     ref_address_cols_uprn_w_ref.extend(["Reference file"])
 
     ref_df_cleaned = ref_df.copy()
+
+    ref_df_cleaned["ref_index"] = ref_df_cleaned.index
       
     # In on-prem LPI db street has been excluded, so put this back in
     if ('Street' not in ref_df_cleaned.columns) & ('Address_LPI' in ref_df_cleaned.columns): 
@@ -218,13 +237,7 @@ def prepare_ref_address(ref_df, ref_address_cols, new_join_col = [], standard_co
         full_address  = ref_df_cleaned[ref_address_cols].apply(lambda row: ' '.join(row.values.astype(str)), axis=1) 
         ref_df_cleaned["fulladdress"] = full_address
 
-    ref_df_cleaned["fulladdress"] = ref_df_cleaned["fulladdress"]\
-    .str.replace("-999","")\
-    .str.replace(" -"," ")\
-    .str.replace("- "," ")\
-    .str.replace(".0","", regex=False)\
-    .str.replace("\s{2,}", " ", regex=True)\
-    .str.strip()
+    ref_df_cleaned = _clean_columns(ref_df_cleaned, ["fulladdress"])
     
     # Create a street column if it doesn't exist by extracting street from the full address
     
@@ -232,6 +245,7 @@ def prepare_ref_address(ref_df, ref_address_cols, new_join_col = [], standard_co
         ref_df_cleaned['Street'] = ref_df_cleaned["fulladdress"].apply(extract_street_name)
 
     # Add index column
+    if 'ref_index' not in ref_df_cleaned.columns:
         ref_df_cleaned['ref_index'] = ref_df_cleaned.index
         
     return ref_df_cleaned
@@ -246,7 +260,7 @@ def extract_postcode(df, col:str) -> PandasSeries:
     return postcode_series
 
 # Remove addresses with no numbers in at all - too high a risk of badly assigning an address
-def check_no_number_addresses(df, in_address_series) -> PandasSeries:
+def check_no_number_addresses(df:PandasDataFrame, in_address_series:str) -> PandasSeries:
     '''
     Highlight addresses from a pandas df where there are no numbers in the address.
     '''
@@ -261,15 +275,6 @@ def check_no_number_addresses(df, in_address_series) -> PandasSeries:
     #print(df[["full_address", "Excluded from search"]])
 
     return df
-
-# def remove_postcode(df, col:str) -> PandasSeries:
-#     '''
-#     Remove a postcode from a string column in a dataframe
-#     '''
-#     address_series_no_pcode = df[col].str.upper().str.replace(\
-#     "\\b(?:[A-Z][A-HJ-Y]?[0-9][0-9A-Z]? ?[0-9][A-Z]{2}|GIR ?0A{2})\\b$|(?:[A-Z][A-HJ-Y]?[0-9][0-9A-Z]? ?[0-9]{1}?)$|\\b(?:[A-Z][A-HJ-Y]?[0-9][0-9A-Z]?)\\b$","", regex=True).str.lower()
-    
-#     return address_series_no_pcode
 
 def extract_street_name(address:str) -> str:
     """
@@ -342,7 +347,7 @@ def extract_street_name(address:str) -> str:
     
     # Exclude non-postal addresses
 
-def remove_non_postal(df, in_address_series):
+def remove_non_postal(df:PandasDataFrame, in_address_series:str):
     '''
     Highlight non-postal addresses from a polars df where a string series that contain specific substrings
     indicating non-postal addresses like 'garage', 'parking', 'shed', etc.

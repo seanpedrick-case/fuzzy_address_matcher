@@ -136,7 +136,9 @@ def standardise_address(df:PandasDataFrame, col:str, out_col:str, standardise:bo
                                                 str.replace(r"\bmaisonette\b", "flat", regex=True).\
                                                 str.replace(r"\bpt\b", "penthouse", regex=True).\
                                                 str.replace(r"\bbst\b","basement", regex=True).\
-                                                str.replace(r"\bbsmt\b","basement", regex=True)
+                                                str.replace(r"\bbsmt\b","basement", regex=True).\
+                                                str.replace(r"\s{2,}", " ", regex=True).\
+                                                str.strip()
         
         df_copy["add_no_pcode_house"] = move_flat_house_court(df_copy)
     

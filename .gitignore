@@ -22,3 +22,6 @@ logs/*
 feedback/*
 input/*
 output/*
+cat_to_idx.txt
+vocab.txt
+word_to_index.txt

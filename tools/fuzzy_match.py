@@ -4,6 +4,7 @@ from typing import Dict, List, Tuple, Type
 from datetime import datetime
 from rapidfuzz import fuzz, process
 import gradio as gr
+from tqdm import tqdm
 
 PandasDataFrame = Type[pd.DataFrame]
 PandasSeries = Type[pd.Series]
@@ -51,7 +52,7 @@ def create_fuzzy_matched_col(df:PandasDataFrame, orig_match_address_series:Panda
     return df
 
 def string_match_by_post_code_multiple(match_address_series:PandasSeries, reference_address_series:PandasSeries,
-                              search_limit=100, scorer_name="token_set_ratio", progress=gr.Progress())-> MatchedResults:
+                              search_limit=100, scorer_name="token_set_ratio", progress=gr.Progress(track_tqdm=True))-> MatchedResults:
     '''
     Matches by Series values; for example idx is post code and 
     values address. Search field is reduced by comparing same post codes address reference_address_series.
@@ -140,7 +141,7 @@ def string_match_by_post_code_multiple(match_address_series:PandasSeries, refere
 
     unique_postcodes = pd.unique(match_address_df['postcode_search'])
 
-    for postcode_match in progress.tqdm(unique_postcodes, desc="Fuzzy matching", unit="fuzzy matched postcodes"):
+    for postcode_match in tqdm(unique_postcodes, desc="Fuzzy matching", unit="fuzzy matched postcodes"):
 
         postcode_match_list = [postcode_match]
         search_indexes = pd.Series()
@@ -177,7 +178,7 @@ def _create_fuzzy_match_results_output(results:PandasDataFrame, search_df_after_
 
         ## Diagnostics
 
-        diag_shortlist, diag_best_match = refine_export_results(results_df=results,\
+        diag_shortlist, diag_best_match = create_diagnostic_results(results_df=results,\
                                       matched_df = search_df_after_stand, ref_list_df = ref_df_after_stand,
                                       fuzzy_match_limit = fuzzy_match_limit, blocker_col=blocker_col)
         
@@ -308,7 +309,7 @@ def create_diag_shortlist(results_df:PandasDataFrame, matched_col:str, fuzzy_mat
             diag_shortlist = diag_shortlist.merge(diag_shortlist_dups[["wratio_score"]], left_index=True, right_index=True, how = "left")
 
     if 'wratio_score' not in diag_shortlist.columns:
-        diag_shortlist['wratio_score'] = '' 
+        diag_shortlist['wratio_score'] = None 
 
     # Order by best score
     diag_shortlist = diag_shortlist.sort_values([
@@ -317,7 +318,7 @@ def create_diag_shortlist(results_df:PandasDataFrame, matched_col:str, fuzzy_mat
 
     return diag_shortlist
 
-def refine_export_results(results_df:PandasDataFrame, 
+def create_diagnostic_results(results_df:PandasDataFrame, 
                            matched_df:PandasDataFrame,
                            ref_list_df:PandasDataFrame,
                            matched_col="fuzzy_match_search_address",
@@ -340,7 +341,10 @@ def refine_export_results(results_df:PandasDataFrame,
     results_df = results_df[results_df[matched_col] !=0 ]
 
     ### Join property number and flat/room number etc. onto results_df
-    ref_list_df["ref_index"] = ref_list_df.index
+    if 'ref_index' not in ref_list_df.columns:
+        print("Existing ref_index column not found")
+        ref_list_df["ref_index"] = ref_list_df.index
+
     ref_join_cols = ["ref_index", final_ref_address_col, "property_number","flat_number","room_number","block_number", "unit_number", 'house_court_name', orig_ref_address_col,"Postcode"]
     ref_list_df = ref_list_df[ref_join_cols].rename(columns={orig_ref_address_col: "reference_orig_address", final_ref_address_col:'reference_list_address'})
 
@@ -351,7 +355,7 @@ def refine_export_results(results_df:PandasDataFrame,
     matched_df_cols = [final_matched_address_col,"property_number","flat_number","room_number", "block_number", "unit_number", 'house_court_name', orig_matched_address_col, "postcode"]
     matched_df = matched_df[matched_df_cols].rename(columns={orig_matched_address_col:"search_orig_address",final_matched_address_col:'search_mod_address'})
     
-    results_df = results_df.merge(matched_df, how = "left", left_on = matched_col, right_on = "search_mod_address", suffixes=("_reference", "_search"))
+    results_df = results_df.merge(matched_df, how = "left", left_on = matched_col, right_on = "search_mod_address", suffixes=("_reference", "_search"))   
     
     # Choose your best matches from the list of options
     diag_shortlist = create_diag_shortlist(results_df, matched_col, fuzzy_match_limit, blocker_col)
@@ -381,12 +385,15 @@ def refine_export_results(results_df:PandasDataFrame,
 
     diag_shortlist = diag_shortlist[match_results_cols]
 
+    diag_shortlist["ref_index"] = diag_shortlist["ref_index"].astype(int, errors="ignore")
+    diag_shortlist["wratio_score"] = diag_shortlist["wratio_score"].astype(float, errors="ignore")
+
     # Choose best match from the shortlist that has been ordered according to score descending
     diag_best_match = diag_shortlist[match_results_cols].drop_duplicates("search_mod_address")
    
     return diag_shortlist, diag_best_match
 
-def join_to_orig_df(match_results_output:PandasDataFrame, search_df:PandasDataFrame, search_df_key_field:str, new_join_col:List[str]) -> PandasDataFrame:
+def create_results_df(match_results_output:PandasDataFrame, search_df:PandasDataFrame, search_df_key_field:str, new_join_col:List[str]) -> PandasDataFrame:
     ''' 
     Following the fuzzy match, join the match results back to the original search dataframe to create a results dataframe.
     '''
@@ -402,7 +409,6 @@ def join_to_orig_df(match_results_output:PandasDataFrame, search_df:PandasDataFr
     
     ref_df_after_stand_cols = ["ref_index", "Reference matched address","Matched with reference address", "Reference file", search_df_key_field]
     ref_df_after_stand_cols.extend(new_join_col)
- 
     
     if (search_df_key_field == "index"):
         # Check index is int
@@ -420,8 +426,6 @@ def join_to_orig_df(match_results_output:PandasDataFrame, search_df:PandasDataFr
     if "Matched with reference address_y" in results_for_orig_df_join.columns: 
         results_for_orig_df_join['Matched with reference address'] = pd.Series(np.where(results_for_orig_df_join['Matched with reference address_y'].notna(), results_for_orig_df_join['Matched with reference address_y'], results_for_orig_df_join['Matched with reference address']))
 
-        #results_for_orig_df_join['Matched with reference address'] = results_for_orig_df_join['Matched with reference address'].fillna(results_for_orig_df_join['Matched with reference address_y']).infer_objects(copy=False)
-
     if "Reference file_y" in results_for_orig_df_join.columns: 
         results_for_orig_df_join['Reference file'] = results_for_orig_df_join['Reference file'].fillna(results_for_orig_df_join['Reference file_y']).infer_objects(copy=False)
 
@@ -429,8 +433,13 @@ def join_to_orig_df(match_results_output:PandasDataFrame, search_df:PandasDataFr
         results_for_orig_df_join['UPRN'] = results_for_orig_df_join['UPRN'].fillna(results_for_orig_df_join['UPRN_y']).infer_objects(copy=False)
 
     # Drop columns that aren't useful
-    results_for_orig_df_join = results_for_orig_df_join.drop(['Reference matched address_y', 'Matched with reference address_y', 'Reference file_y', 'search_df_key_field_y', 'UPRN_y', 'index_y', "full_address_search","postcode_search", "full_address_1", "full_address_2", "full_address",
+    results_for_orig_df_join = results_for_orig_df_join.drop(['Reference matched address_y', 'Matched with reference address_y', 'Reference file_y', 'search_df_key_field_y', 'UPRN_y', 'index_y', "full_address_search","postcode_search", "full_address_1", "full_address_2", 
                                    "address_stand", "property_number","prop_number" "flat_number" "apart_number" "first_sec_number" "room_number"], axis = 1, errors = "ignore")
+    
+    results_for_orig_df_join.rename(columns={"full_address":"Search data address"}, inplace = True)
+
+    results_for_orig_df_join["index"] = results_for_orig_df_join["index"].astype(int, errors="ignore")
+    results_for_orig_df_join["ref_index"] = results_for_orig_df_join["ref_index"].astype(int, errors="ignore")
 
     # Replace blanks with NA, fix UPRNs
     results_for_orig_df_join = results_for_orig_df_join.replace(r'^\s*$', np.nan, regex=True)   
@@ -439,6 +448,7 @@ def join_to_orig_df(match_results_output:PandasDataFrame, search_df:PandasDataFr
     
     # Replace cells with only 'nan' with blank
     results_for_orig_df_join = results_for_orig_df_join.replace(r'^nan$', "", regex=True)
-  
+
+    results_for_orig_df_join.to_csv("output/results_for_orig_df_join.csv")
     
     return results_for_orig_df_join

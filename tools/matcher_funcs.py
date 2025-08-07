@@ -9,6 +9,7 @@ import math
 from datetime import datetime
 import copy
 import gradio as gr
+from tqdm import tqdm
 
 PandasDataFrame = Type[pd.DataFrame]
 PandasSeries = Type[pd.Series]
@@ -26,7 +27,7 @@ run_standardise = True
 
 from tools.constants import *
 from tools.preparation import prepare_search_address_string, prepare_search_address,  extract_street_name, prepare_ref_address, remove_non_postal, check_no_number_addresses
-from tools.fuzzy_match import string_match_by_post_code_multiple, _create_fuzzy_match_results_output, join_to_orig_df
+from tools.fuzzy_match import string_match_by_post_code_multiple, _create_fuzzy_match_results_output, create_results_df
 from tools.standardise import standardise_wrapper_func
 
 # Neural network functions
@@ -69,14 +70,11 @@ def read_file(filename:str) -> PandasDataFrame:
 def get_file_name(in_name: str) -> str:
     """Get the name of a file from a string, handling both Windows and Unix paths."""
 
-    print("in_name: ", in_name)
     match = re.search(rf'{re.escape(os.sep)}(?!.*{re.escape(os.sep)})(.*)', in_name) 
     if match:
         matched_result = match.group(1)
     else:
         matched_result = None
-
-    print("Matched result: ", matched_result)
     
     return matched_result
 
@@ -108,7 +106,7 @@ def filter_not_matched(
     
     return search_df.iloc[np.where(~matched)[0]]
 
-def query_addressbase_api(in_api_key:str, Matcher:MatcherClass, query_type:str, progress=gr.Progress()):
+def query_addressbase_api(in_api_key:str, Matcher:MatcherClass, query_type:str, progress=gr.Progress(track_tqdm=True)):
     
     final_api_output_file_name = ""
 
@@ -204,7 +202,7 @@ def query_addressbase_api(in_api_key:str, Matcher:MatcherClass, query_type:str, 
             loop_df = Matcher.ref_df
             loop_list = [Matcher.ref_df]
 
-            for address in progress.tqdm(api_search_df['full_address_postcode'], desc= "Making API calls", unit="addresses", total=len(api_search_df['full_address_postcode'])):
+            for address in tqdm(api_search_df['full_address_postcode'], desc= "Making API calls", unit="addresses", total=len(api_search_df['full_address_postcode'])):
                 print("Query number: " + str(i+1), "with address: ", address)
 
                 api_search_index = api_search_df.index
@@ -368,7 +366,7 @@ def query_addressbase_api(in_api_key:str, Matcher:MatcherClass, query_type:str, 
                         
     return Matcher, final_api_output_file_name
 
-def load_ref_data(Matcher:MatcherClass, ref_data_state:PandasDataFrame, in_ref:List[str], in_refcol:List[str], in_api:List[str], in_api_key:str, query_type:str, progress=gr.Progress()):
+def load_ref_data(Matcher:MatcherClass, ref_data_state:PandasDataFrame, in_ref:List[str], in_refcol:List[str], in_api:List[str], in_api_key:str, query_type:str, progress=gr.Progress(track_tqdm=True)):
         '''
         Check for reference address data, do some preprocessing, and load in from the Addressbase API if required.
         '''
@@ -577,7 +575,7 @@ def load_match_data_and_filter(Matcher:MatcherClass, data_state:PandasDataFrame,
             Matcher.search_df.loc[~(postcode_found_in_search), "Excluded from search"] = "Postcode area not found"
             Matcher.search_df.loc[~(length_more_than_0), "Excluded from search"] = "Address length 0"
             Matcher.pre_filter_search_df = Matcher.search_df.copy()#.drop(["index", "level_0"], axis = 1, errors = "ignore").reset_index()
-            Matcher.pre_filter_search_df = Matcher.pre_filter_search_df.drop("address_cols_joined", axis = 1)
+            #Matcher.pre_filter_search_df = Matcher.pre_filter_search_df.drop("address_cols_joined", axis = 1)
 
             Matcher.excluded_df = Matcher.search_df.copy()[~(postcode_found_in_search) | ~(length_more_than_0)]
             Matcher.search_df = Matcher.search_df[(postcode_found_in_search) & (length_more_than_0)]
@@ -657,43 +655,91 @@ def load_match_data_and_filter(Matcher:MatcherClass, data_state:PandasDataFrame,
 
     return Matcher
 
-def load_matcher_data(in_text, in_file, in_ref, data_state, results_data_state, ref_data_state, in_colnames, in_refcol, in_joincol, in_existing, Matcher, in_api, in_api_key):
-        '''
-        Load in user inputs from the Gradio interface. Convert all input types (single address, or csv input) into standardised data format that can be used downstream for the fuzzy matching.
-        '''
-        final_api_output_file_name = ""
+def load_matcher_data(
+    in_text: str,
+    in_file: str,
+    in_ref: str,
+    data_state: PandasDataFrame,
+    results_data_state: PandasDataFrame,
+    ref_data_state: PandasDataFrame,
+    in_colnames: list,
+    in_refcol: list,
+    in_joincol: list,
+    in_existing: list,
+    Matcher: MatcherClass,
+    in_api:str,
+    in_api_key: str
+) -> tuple:
+    """
+    Load and preprocess user inputs from the Gradio interface for address matching.
 
-        today_rev = datetime.now().strftime("%Y%m%d")
+    This function standardises all input types (single address string, file uploads, etc.) into a consistent data format
+    suitable for downstream fuzzy matching. It handles both search and reference data, including API-based reference data retrieval
+    if requested.
 
-        # Abort flag for if it's not even possible to attempt the first stage of the match for some reason
-        Matcher.abort_flag = False
+    Args:
+        in_text (str): Single address input as text, if provided.
+        in_file: Uploaded file(s) containing addresses to match.
+        in_ref: Uploaded reference file(s) or None if using API.
+        data_state (PandasDataFrame): Current state of the search data.
+        results_data_state (PandasDataFrame): Current state of the results data.
+        ref_data_state (PandasDataFrame): Current state of the reference data.
+        in_colnames (list): List of column names that make up the address in the search data.
+        in_refcol (list): List of column names that make up the address in the reference data.
+        in_joincol (list): List of columns to join on between search and reference data.
+        in_existing (list): List of columns indicating existing matches.
+        Matcher (MatcherClass): Matcher object to store and process data.
+        in_api: Flag or value indicating whether to use the API for reference data.
+        in_api_key (str): API key for reference data retrieval, if applicable.
 
-        ### ref_df FILES ###
-        # If not an API call, run this first
-        if not in_api:
-            Matcher, final_api_output_file_name = load_ref_data(Matcher, ref_data_state, in_ref, in_refcol, in_api, in_api_key, query_type=in_api)
+    Returns:
+        tuple: (Matcher, final_api_output_file_name)
+            Matcher: The updated Matcher object with loaded and preprocessed data.
+            final_api_output_file_name (str): The filename of the reference data if loaded from API, else empty string.
+    """
 
-        ### MATCH/SEARCH FILES ###
-        # If doing API calls, we need to know the search data before querying for specific addresses/postcodes
-        Matcher = load_match_data_and_filter(Matcher, data_state, results_data_state, in_file, in_text, in_colnames, in_joincol, in_existing, in_api)
+    final_api_output_file_name = ""
 
-        # If an API call, ref_df data is loaded after
-        if in_api:
-            Matcher, final_api_output_file_name = load_ref_data(Matcher, ref_data_state, in_ref, in_refcol, in_api, in_api_key, query_type=in_api)
-            
-        print("Shape of ref_df after filtering is: ", Matcher.ref_df.shape)
-        print("Shape of search_df after filtering is: ", Matcher.search_df.shape)
-    
-        Matcher.match_outputs_name = output_folder + "diagnostics_initial_" + today_rev + ".csv" 
-        Matcher.results_orig_df_name = output_folder + "results_initial_" + today_rev + ".csv" 
-    
-        Matcher.match_results_output.to_csv(Matcher.match_outputs_name, index = None)
-        Matcher.results_on_orig_df.to_csv(Matcher.results_orig_df_name, index = None)
+    today_rev = datetime.now().strftime("%Y%m%d")
+
+    # Abort flag for if it's not even possible to attempt the first stage of the match for some reason
+    Matcher.abort_flag = False
+
+    ### ref_df FILES ###
+    # If not an API call, run this first
+    if not in_api:
+        Matcher, final_api_output_file_name = load_ref_data(Matcher, ref_data_state, in_ref, in_refcol, in_api, in_api_key, query_type=in_api)
+
+    ### MATCH/SEARCH FILES ###
+    # If doing API calls, we need to know the search data before querying for specific addresses/postcodes
+    Matcher = load_match_data_and_filter(Matcher, data_state, results_data_state, in_file, in_text, in_colnames, in_joincol, in_existing, in_api)
+
+    # If an API call, ref_df data is loaded after
+    if in_api:
+        Matcher, final_api_output_file_name = load_ref_data(Matcher, ref_data_state, in_ref, in_refcol, in_api, in_api_key, query_type=in_api)
         
-        return Matcher, final_api_output_file_name
+    print("Shape of ref_df after filtering is: ", Matcher.ref_df.shape)
+    print("Shape of search_df after filtering is: ", Matcher.search_df.shape)
+
+    Matcher.match_outputs_name = output_folder + "diagnostics_initial_" + today_rev + ".csv" 
+    Matcher.results_orig_df_name = output_folder + "results_initial_" + today_rev + ".csv" 
+
+    if "fuzzy_score" in Matcher.match_results_output.columns:
+        Matcher.match_results_output["fuzzy_score"] = (
+            pd.to_numeric(Matcher.match_results_output["fuzzy_score"], errors="coerce").round(2)
+        )
+    if "wratio_score" in Matcher.match_results_output.columns:
+        Matcher.match_results_output["wratio_score"] = (
+            pd.to_numeric(Matcher.match_results_output["wratio_score"], errors="coerce").round(2)
+        )
+
+    Matcher.match_results_output.to_csv(Matcher.match_outputs_name, index = None)
+    Matcher.results_on_orig_df.to_csv(Matcher.results_orig_df_name, index = None)
+    
+    return Matcher, final_api_output_file_name
 
 # Run whole matcher process
-def run_matcher(in_text:str, in_file:str, in_ref:str, data_state:PandasDataFrame, results_data_state:PandasDataFrame, ref_data_state:PandasDataFrame, in_colnames:List[str], in_refcol:List[str], in_joincol:List[str], in_existing:List[str], in_api:str, in_api_key:str, InitMatch:MatcherClass = InitMatch, progress=gr.Progress()):  
+def run_matcher(in_text:str, in_file:str, in_ref:str, data_state:PandasDataFrame, results_data_state:PandasDataFrame, ref_data_state:PandasDataFrame, in_colnames:List[str], in_refcol:List[str], in_joincol:List[str], in_existing:List[str], in_api:str, in_api_key:str, InitMatch:MatcherClass = InitMatch, progress=gr.Progress(track_tqdm=True)):  
     '''
     Split search and reference data into batches. Loop and run through the match script for each batch of data.
     '''
@@ -722,7 +768,6 @@ def run_matcher(in_text:str, in_file:str, in_ref:str, data_state:PandasDataFrame
     # Polars implementation not yet finalised
     #InitMatch.search_df = pl.from_pandas(InitMatch.search_df)
     #InitMatch.ref_df = pl.from_pandas(InitMatch.ref_df)
-
     
     # Prepare all search addresses
     if type(InitMatch.search_df) == str:
@@ -739,7 +784,6 @@ def run_matcher(in_text:str, in_file:str, in_ref:str, data_state:PandasDataFrame
     # Initial preparation of reference addresses
     InitMatch.ref_df_cleaned = prepare_ref_address(InitMatch.ref_df, InitMatch.ref_address_cols, InitMatch.new_join_col)
     
-
     # Polars implementation - not finalised
     #InitMatch.search_df_cleaned = InitMatch.search_df_cleaned.to_pandas()
     #InitMatch.ref_df_cleaned = InitMatch.ref_df_cleaned.to_pandas()
@@ -747,8 +791,10 @@ def run_matcher(in_text:str, in_file:str, in_ref:str, data_state:PandasDataFrame
     # Standardise addresses    
     # Standardise - minimal
 
-
     tic = time.perf_counter()
+
+    progress(0.1, desc="Performing minimal standardisation")
+
     InitMatch.search_df_after_stand, InitMatch.ref_df_after_stand = standardise_wrapper_func(
         InitMatch.search_df_cleaned.copy(),
         InitMatch.ref_df_cleaned.copy(),
@@ -758,6 +804,8 @@ def run_matcher(in_text:str, in_file:str, in_ref:str, data_state:PandasDataFrame
 
     toc = time.perf_counter()
     print(f"Performed the minimal standardisation step in {toc - tic:0.1f} seconds")
+
+    progress(0.1, desc="Performing full standardisation")
 
     # Standardise - full
     tic = time.perf_counter()
@@ -784,8 +832,8 @@ def run_matcher(in_text:str, in_file:str, in_ref:str, data_state:PandasDataFrame
     n = 0
     number_of_batches = range_df.shape[0]
 
-    for row in progress.tqdm(range(0,len(range_df)), desc= "Running through batches", unit="batches", total=number_of_batches):
-        print("Running batch ", str(n+1))
+    for row in progress.tqdm(range(0,number_of_batches), desc= "Matching addresses in batches", unit="batches", total=number_of_batches):
+        print("Running batch", str(n+1))
 
         search_range = range_df.iloc[row]['search_range']
         ref_range = range_df.iloc[row]['ref_range']
@@ -830,6 +878,8 @@ def run_matcher(in_text:str, in_file:str, in_ref:str, data_state:PandasDataFrame
     # Remove any duplicates from reference df, prioritise successful matches
     OutputMatch.results_on_orig_df = OutputMatch.results_on_orig_df.sort_values(by=["index", "Matched with reference address"], ascending=[True,False]).drop_duplicates(subset="index")
 
+    
+
     overall_toc = time.perf_counter()
     time_out = f"The overall match (all batches) took {overall_toc - overall_tic:0.1f} seconds"
 
@@ -851,14 +901,13 @@ def run_matcher(in_text:str, in_file:str, in_ref:str, data_state:PandasDataFrame
     nnet_std_output = OutputMatch.match_results_output.copy()
     nnet_std_summary = create_match_summary(nnet_std_output, "Neural net standardised")
 
-    final_summary = fuzzy_not_std_summary + "\n" + fuzzy_std_summary + "\n" + nnet_std_summary + "\n" + time_out
-
-    
+    final_summary = fuzzy_not_std_summary + "\n" + fuzzy_std_summary + "\n" + nnet_std_summary + "\n" + time_out    
 
     estimate_total_processing_time = sum_numbers_before_seconds(time_out)
     print("Estimated total processing time:", str(estimate_total_processing_time))
 
     output_files.extend([OutputMatch.results_orig_df_name, OutputMatch.match_outputs_name])
+
     return final_summary, output_files, estimate_total_processing_time
 
 # Run a match run for a single batch
@@ -985,7 +1034,7 @@ def create_batch_ranges(df:PandasDataFrame, ref_df:PandasDataFrame, batch_size:i
     
     return lengths_df
 
-def run_single_match_batch(InitialMatch:MatcherClass, batch_n:int, total_batches:int, progress=gr.Progress()):
+def run_single_match_batch(InitialMatch:MatcherClass, batch_n:int, total_batches:int, progress=gr.Progress(track_tqdm=True)):
     '''
     Over-arching function for running a single batch of data through the full matching process. Calls fuzzy matching, then neural network match functions in order. It outputs a summary of the match, and a MatcherClass with the matched data included.
     '''
@@ -1074,7 +1123,7 @@ def run_single_match_batch(InitialMatch:MatcherClass, batch_n:int, total_batches
     return summary_of_summaries, FuzzyNNetStdMatch
 
 # Overarching functions
-def orchestrate_single_match_batch(Matcher, standardise = False, nnet = False, file_stub= "not_std_", df_name = "Fuzzy not standardised"):
+def orchestrate_single_match_batch(Matcher:MatcherClass, standardise = False, nnet = False, file_stub= "not_std_", df_name = "Fuzzy not standardised"):
 
         today_rev = datetime.now().strftime("%Y%m%d")
         
@@ -1152,20 +1201,24 @@ def orchestrate_single_match_batch(Matcher, standardise = False, nnet = False, f
                 return Matcher
             else:
                 Matcher.match_results_output = match_results_output
-                Matcher.predict_df_nnet = predict_df_nnet 
-        
+                Matcher.predict_df_nnet = predict_df_nnet
+
         # Save to file
         Matcher.results_on_orig_df = results_on_orig_df
-
-        print("Results output in orchestrate match run shape: ", Matcher.results_on_orig_df.shape)
-
-        Matcher.summary = summary
-  
+        Matcher.summary = summary  
         Matcher.output_summary = create_match_summary(Matcher.match_results_output, df_name = df_name)       
         
         Matcher.match_outputs_name = output_folder + "diagnostics_" + file_stub + today_rev + ".csv"
         Matcher.results_orig_df_name = output_folder + "results_" + file_stub + today_rev + ".csv"
-    
+
+        if "fuzzy_score" in Matcher.match_results_output.columns:
+            Matcher.match_results_output["fuzzy_score"] = (
+            pd.to_numeric(Matcher.match_results_output["fuzzy_score"], errors="coerce").round(2)
+            )
+        if "wratio_score" in Matcher.match_results_output.columns:
+            Matcher.match_results_output["wratio_score"] = (
+                pd.to_numeric(Matcher.match_results_output["wratio_score"], errors="coerce").round(2)
+            )    
         Matcher.match_results_output.to_csv(Matcher.match_outputs_name, index = None)
         Matcher.results_on_orig_df.to_csv(Matcher.results_orig_df_name, index = None)
     
@@ -1248,7 +1301,7 @@ def full_fuzzy_match(search_df:PandasDataFrame,
         summary = create_match_summary(match_results_output, df_name)
         
         if type(search_df) != str:
-            results_on_orig_df = join_to_orig_df(match_results_output, search_df_cleaned, search_df_key_field, new_join_col)
+            results_on_orig_df = create_results_df(match_results_output, search_df_cleaned, search_df_key_field, new_join_col)
         else: results_on_orig_df = match_results_output
 
         print("results_on_orig_df in fuzzy_match shape: ", results_on_orig_df.shape)
@@ -1283,11 +1336,10 @@ def full_fuzzy_match(search_df:PandasDataFrame,
         summary = create_match_summary(match_results_output, df_name)
         
         if type(search_df) != str:
-            results_on_orig_df = join_to_orig_df(match_results_output, search_df_after_stand, search_df_key_field, new_join_col)
+            results_on_orig_df = create_results_df(match_results_output, search_df_after_stand, search_df_key_field, new_join_col)
         else: results_on_orig_df = match_results_output
         
-        return diag_shortlist, diag_best_match,\
-        match_results_output, results_on_orig_df, summary, search_address_cols
+        return diag_shortlist, diag_best_match, match_results_output, results_on_orig_df, summary, search_address_cols
     
     print("Starting the fuzzy match with street as blocker")
     
@@ -1314,7 +1366,7 @@ def full_fuzzy_match(search_df:PandasDataFrame,
     ### Join URPN back onto orig df
 
     if type(search_df) != str:
-        results_on_orig_df = join_to_orig_df(match_results_output, search_df_cleaned, search_df_key_field, new_join_col)
+        results_on_orig_df = create_results_df(match_results_output, search_df_cleaned, search_df_key_field, new_join_col)
     else: results_on_orig_df = match_results_output
 
     print("results_on_orig_df in fuzzy_match shape: ", results_on_orig_df.shape)
@@ -1480,7 +1532,7 @@ def full_nn_match(ref_address_cols:List[str],
     ### Join URPN back onto orig df
 
     if type(search_df) != str:
-        results_on_orig_df = join_to_orig_df(match_results_output_final_three, search_df_after_stand, search_df_key_field, new_join_col)
+        results_on_orig_df = create_results_df(match_results_output_final_three, search_df_after_stand, search_df_key_field, new_join_col)
     else: results_on_orig_df = match_results_output_final_three
     
     return match_results_output_final_three, results_on_orig_df, summary_three, predict_df
@@ -1495,18 +1547,28 @@ def combine_dfs_and_remove_dups(orig_df:PandasDataFrame, new_df:PandasDataFrame,
     # If one of the dataframes is empty, break
     if (orig_df.empty) & (new_df.empty):
         return orig_df
-    
 
+    # Ensure that the original search result is returned
+    if "Search data address" not in orig_df.columns:
+        if "search_orig_address" in orig_df.columns:
+            orig_df["Search data address"] = orig_df["search_orig_address"]
+        elif "address_cols_joined" in orig_df.columns:
+            orig_df["Search data address"] = orig_df["address_cols_joined"]
+
+    if "Search data address" not in new_df.columns:
+        if "search_orig_address" in new_df.columns:
+            new_df["Search data address"] = new_df["search_orig_address"]
+        elif "address_cols_joined" in new_df.columns:
+            new_df["Search data address"] = new_df["address_cols_joined"]
 
     combined_std_not_matches = pd.concat([orig_df, new_df])#, ignore_index=True)
-
 
     # If no results were combined
     if combined_std_not_matches.empty:
         combined_std_not_matches[match_address_series] = False
 
-        if "full_address" in combined_std_not_matches.columns:
-            combined_std_not_matches[index_col] = combined_std_not_matches["full_address"]
+        #if "full_address" in combined_std_not_matches.columns:
+        #    combined_std_not_matches[index_col] = combined_std_not_matches["full_address"]
         combined_std_not_matches["fuzzy_score"] = 0
         return combined_std_not_matches
     
@@ -1540,6 +1602,7 @@ def combine_two_matches(OrigMatchClass:MatcherClass, NewMatchClass:MatcherClass,
         found_index = NewMatchClass.results_on_orig_df.loc[NewMatchClass.results_on_orig_df["Matched with reference address"] == True, NewMatchClass.search_df_key_field].astype(int)
 
         key_field_values = NewMatchClass.search_df_not_matched[NewMatchClass.search_df_key_field].astype(int)  # Assuming list conversion is suitable
+
         rows_to_drop = key_field_values[key_field_values.isin(found_index)].tolist()
         NewMatchClass.search_df_not_matched = NewMatchClass.search_df_not_matched.loc[~NewMatchClass.search_df_not_matched[NewMatchClass.search_df_key_field].isin(rows_to_drop),:]#.drop(rows_to_drop, axis = 0)
 
@@ -1565,11 +1628,13 @@ def combine_two_matches(OrigMatchClass:MatcherClass, NewMatchClass:MatcherClass,
         NewMatchClass.results_on_orig_df = NewMatchClass.results_on_orig_df.drop("fuzzy_score", axis = 1)
 
         # Drop any duplicates, prioritise any matches
+        NewMatchClass.results_on_orig_df["index"] = NewMatchClass.results_on_orig_df["index"].astype(int, errors="ignore")
+        NewMatchClass.results_on_orig_df["ref_index"] = NewMatchClass.results_on_orig_df["ref_index"].astype(int, errors="ignore")
+
         NewMatchClass.results_on_orig_df = NewMatchClass.results_on_orig_df.sort_values(by=["index", "Matched with reference address"], ascending=[True,False]).drop_duplicates(subset="index")
     
         NewMatchClass.output_summary = create_match_summary(NewMatchClass.match_results_output, df_name = df_name)
-        print(NewMatchClass.output_summary)
-    
+        print(NewMatchClass.output_summary)    
 
         NewMatchClass.search_df_not_matched = filter_not_matched(NewMatchClass.match_results_output, NewMatchClass.search_df, NewMatchClass.search_df_key_field)
 
@@ -1580,8 +1645,17 @@ def combine_two_matches(OrigMatchClass:MatcherClass, NewMatchClass:MatcherClass,
         NewMatchClass.results_orig_df_name = output_folder + "results_" + today_rev + ".csv" # + NewMatchClass.file_name + "_"
 
         # Only keep essential columns
-        essential_results_cols = [NewMatchClass.search_df_key_field, "Excluded from search", "Matched with reference address", "ref_index", "Reference matched address", "Reference file"]
-        essential_results_cols.extend(NewMatchClass.new_join_col) 
+        essential_results_cols = [NewMatchClass.search_df_key_field, "Search data address", "Excluded from search", "Matched with reference address", "ref_index", "Reference matched address", "Reference file"]
+        essential_results_cols.extend(NewMatchClass.new_join_col)
+
+        if "fuzzy_score" in NewMatchClass.match_results_output.columns:
+            NewMatchClass.match_results_output["fuzzy_score"] = (
+            pd.to_numeric(NewMatchClass.match_results_output["fuzzy_score"], errors="coerce").round(2)
+            )
+        if "wratio_score" in NewMatchClass.match_results_output.columns:
+            NewMatchClass.match_results_output["wratio_score"] = (
+                pd.to_numeric(NewMatchClass.match_results_output["wratio_score"], errors="coerce").round(2)
+            )
     
         NewMatchClass.match_results_output.to_csv(NewMatchClass.match_outputs_name, index = None)
         NewMatchClass.results_on_orig_df[essential_results_cols].to_csv(NewMatchClass.results_orig_df_name, index = None)
