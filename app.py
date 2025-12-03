@@ -37,7 +37,7 @@ usage_logs_folder = 'usage/' + today_rev + '/' + host_name + '/'
 ADDRESSBASE_API_KEY = get_or_create_env_var('ADDRESSBASE_API_KEY', '')
 
 # Create the gradio interface
-block = gr.Blocks(theme = gr.themes.Base())
+block = gr.Blocks()
 
 with block:
 
@@ -161,7 +161,7 @@ print(f'The value of COGNITO_AUTH is {COGNITO_AUTH}')
 
 if __name__ == "__main__":
     if os.environ['COGNITO_AUTH'] == "1":
-        block.queue().launch(show_error=True, auth=authenticate_user, max_file_size='50mb')
+        block.queue().launch(show_error=True, auth=authenticate_user, max_file_size='50mb', theme = gr.themes.Base())
     else:
-        block.queue().launch(show_error=True, inbrowser=True, max_file_size='50mb')
+        block.queue().launch(show_error=True, inbrowser=True, max_file_size='50mb', theme = gr.themes.Base())
 
