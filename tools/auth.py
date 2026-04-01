@@ -1,13 +1,18 @@
 import boto3
 from tools.helper_functions import get_or_create_env_var
 
-client_id = get_or_create_env_var('AWS_CLIENT_ID', '') # This client id is borrowed from async gradio app client
-print(f'The value of AWS_CLIENT_ID is {client_id}')
+client_id = get_or_create_env_var(
+    "AWS_CLIENT_ID", ""
+)  # This client id is borrowed from async gradio app client
+# print(f"The value of AWS_CLIENT_ID is {client_id}")
 
-user_pool_id = get_or_create_env_var('AWS_USER_POOL_ID', '')
-print(f'The value of AWS_USER_POOL_ID is {user_pool_id}')
+user_pool_id = get_or_create_env_var("AWS_USER_POOL_ID", "")
+# print(f"The value of AWS_USER_POOL_ID is {user_pool_id}")
 
-def authenticate_user(username, password, user_pool_id=user_pool_id, client_id=client_id):
+
+def authenticate_user(
+    username, password, user_pool_id=user_pool_id, client_id=client_id
+):
     """Authenticates a user against an AWS Cognito user pool.
 
     Args:
@@ -20,20 +25,20 @@ def authenticate_user(username, password, user_pool_id=user_pool_id, client_id=c
         bool: True if the user is authenticated, False otherwise.
     """
 
-    client = boto3.client('cognito-idp')  # Cognito Identity Provider client
+    client = boto3.client("cognito-idp")  # Cognito Identity Provider client
 
     try:
         response = client.initiate_auth(
-            AuthFlow='USER_PASSWORD_AUTH',
+            AuthFlow="USER_PASSWORD_AUTH",
             AuthParameters={
-                'USERNAME': username,
-                'PASSWORD': password,
+                "USERNAME": username,
+                "PASSWORD": password,
             },
-            ClientId=client_id
+            ClientId=client_id,
         )
 
         # If successful, you'll receive an AuthenticationResult in the response
-        if response.get('AuthenticationResult'):
+        if response.get("AuthenticationResult"):
             return True
         else:
             return False
