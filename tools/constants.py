@@ -1,50 +1,44 @@
 import os
-import pandas as pd
-import torch
 import zipfile
 from typing import List, Type
+
+import pandas as pd
 from pydantic import BaseModel
 
-from .pytorch_models import TransformerClassifier, TextClassifier, LSTMTextClassifier
+from tools.config import (
+    MATCHER_CUDA_VISIBLE_DEVICES,
+    MODEL_EXTRACT_USE_PROJECT_ROOT,
+    N_EPOCHS,
+    USE_NNET_MODEL,
+    data_sample_size,
+    file_step_suffix,
+    filter_to_lambeth_pcodes,
+    fuzzy_match_limit,
+    fuzzy_method,
+    fuzzy_scorer_used,
+    fuzzy_search_addr_limit,
+    matching_variables,
+    model_stub,
+    model_type,
+    model_version,
+    output_folder,
+    score_cut_off,
+    standardise,
+    text_columns,
+    weights,
+)
 
 PandasDataFrame = Type[pd.DataFrame]
 PandasSeries = Type[pd.Series]
-
-
-def get_or_create_env_var(var_name, default_value):
-    # Get the environment variable if it exists
-    value = os.environ.get(var_name)
-
-    # If it doesn't exist, set it to the default value
-    if value is None:
-        os.environ[var_name] = default_value
-        value = default_value
-
-    return value
-
-
-# Retrieving or setting output folder
-env_var_name = "GRADIO_OUTPUT_FOLDER"
-default_value = "output/"
-
-output_folder = get_or_create_env_var(env_var_name, default_value)
-# print(f"The value of {env_var_name} is {output_folder}")
 
 # +
 """ Fuzzywuzzy/Rapidfuzz scorer to use. Options are: ratio, partial_ratio, token_sort_ratio, partial_token_sort_ratio,
 token_set_ratio, partial_token_set_ratio, QRatio, UQRatio, WRatio (default), UWRatio
 details here: https://stackoverflow.com/questions/31806695/when-to-use-which-fuzz-function-to-compare-2-strings"""
 
-fuzzy_scorer_used = "token_set_ratio"
-
-fuzzy_match_limit = 85
-fuzzy_search_addr_limit = 20
-filter_to_lambeth_pcodes = True
-standardise = False
-
 if standardise:
     std = "_std"
-if not standardise:
+else:
     std = "_not_std"
 
 dataset_name = "data" + std
@@ -60,15 +54,6 @@ suffix_used = dataset_name + "_" + fuzzy_scorer_used
 # model_version = "00000001"
 # file_step_suffix = "550" # I add a suffix to output files to be able to separate comparisons of test data from the same model with different steps e.g. '350' indicates a model that has been through 350,000 steps of training
 
-# Uncomment these lines for the pytorch model
-model_type = "lstm"
-model_stub = "pytorch/lstm"
-model_version = ""
-file_step_suffix = ""
-data_sample_size = 476887
-N_EPOCHS = 10
-max_predict_len = 12000
-
 word_to_index = {}
 cat_to_idx = {}
 vocab = []
@@ -79,12 +64,12 @@ labels_list = []
 
 ROOT_DIR = os.path.realpath(os.path.join(os.path.dirname(__file__), ".."))
 
-# If in a non-standard location (e.g. on AWS Lambda Function URL, then save model to tmp drive)
-if output_folder == "output/":
+# If using default relative output/, extract model next to project root; otherwise next to output path.
+if MODEL_EXTRACT_USE_PROJECT_ROOT:
     out_model_dir = ROOT_DIR
     print(out_model_dir)
 else:
-    out_model_dir = output_folder[:-1]
+    out_model_dir = output_folder.rstrip("/\\")
     print(out_model_dir)
 
 model_dir_name = os.path.join(ROOT_DIR, "nnet_model", model_stub, model_version)
@@ -92,231 +77,147 @@ model_dir_name = os.path.join(ROOT_DIR, "nnet_model", model_stub, model_version)
 model_path = os.path.join(model_dir_name, "saved_model.zip")
 print("Model zip path: ", model_path)
 
-if os.path.exists(model_path):
+exported_model = []
 
-    os.environ["CUDA_VISIBLE_DEVICES"] = (
-        "-1"  # Better to go without GPU to avoid 'out of memory' issues
-    )
-    device = "cpu"
-
-    ## The labels_list object defines the structure of the prediction outputs. It must be the same as what the model was originally trained on
-
-    """ Load pre-trained model """
-
-    with zipfile.ZipFile(model_path, "r") as zip_ref:
-        zip_ref.extractall(out_model_dir)
-
-    # if model_stub == "addr_model_out_lon":
-
-    # import tensorflow as tf
-
-    # tf.config.list_physical_devices('GPU')
-
-    #     # Number of labels in total (+1 for the blank category)
-    #     n_labels = len(labels_list) + 1
-
-    #     # Allowable characters for the encoded representation
-    #     vocab = list(string.digits + string.ascii_lowercase + string.punctuation + string.whitespace)
-
-    #     #print("Loading TF model")
-
-    #     exported_model = tf.saved_model.load(model_dir_name)
-
-    #     labels_list = [
-    #     'SaoText',  # 1
-    #     'SaoStartNumber',  # 2
-    #     'SaoStartSuffix',  # 3
-    #     'SaoEndNumber',  # 4
-    #     'SaoEndSuffix',  # 5
-    #     'PaoText',  # 6
-    #     'PaoStartNumber',  # 7
-    #     'PaoStartSuffix',  # 8
-    #     'PaoEndNumber',  # 9
-    #     'PaoEndSuffix',  # 10
-    #     'Street',  # 11
-    #     'PostTown',  # 12
-    #     'AdministrativeArea', #13
-    #     'Postcode'  # 14
-    #     ]
-
-    if "pytorch" in model_stub:
-
-        labels_list = [
-            "SaoText",  # 1
-            "SaoStartNumber",  # 2
-            "SaoStartSuffix",  # 3
-            "SaoEndNumber",  # 4
-            "SaoEndSuffix",  # 5
-            "PaoText",  # 6
-            "PaoStartNumber",  # 7
-            "PaoStartSuffix",  # 8
-            "PaoEndNumber",  # 9
-            "PaoEndSuffix",  # 10
-            "Street",  # 11
-            "PostTown",  # 12
-            "AdministrativeArea",  # 13
-            "Postcode",  # 14
-            "IGNORE",
-        ]
-
-        if (
-            (model_type == "transformer")
-            | (model_type == "gru")
-            | (model_type == "lstm")
-        ):
-            # Load vocab and word_to_index
-            with open(out_model_dir + "/vocab.txt", "r") as f:
-                vocab = eval(f.read())
-            with open(out_model_dir + "/word_to_index.txt", "r") as f:
-                word_to_index = eval(f.read())
-            with open(out_model_dir + "/cat_to_idx.txt", "r") as f:
-                cat_to_idx = eval(f.read())
-
-            VOCAB_SIZE = len(word_to_index)
-            OUTPUT_DIM = len(cat_to_idx) + 1  # Number of classes/categories
-            EMBEDDING_DIM = 48
-            DROPOUT = 0.1
-            PAD_TOKEN = 0
-
-            if model_type == "transformer":
-                NHEAD = 4
-                NUM_ENCODER_LAYERS = 1
-
-                exported_model = TransformerClassifier(
-                    VOCAB_SIZE,
-                    EMBEDDING_DIM,
-                    NHEAD,
-                    NUM_ENCODER_LAYERS,
-                    OUTPUT_DIM,
-                    DROPOUT,
-                    PAD_TOKEN,
-                )
-
-            elif model_type == "gru":
-                N_LAYERS = 3
-                HIDDEN_DIM = 128
-                exported_model = TextClassifier(
-                    VOCAB_SIZE,
-                    EMBEDDING_DIM,
-                    HIDDEN_DIM,
-                    OUTPUT_DIM,
-                    N_LAYERS,
-                    DROPOUT,
-                    PAD_TOKEN,
-                )
-
-            elif model_type == "lstm":
-                N_LAYERS = 3
-                HIDDEN_DIM = 128
-
-                exported_model = LSTMTextClassifier(
-                    VOCAB_SIZE,
-                    EMBEDDING_DIM,
-                    HIDDEN_DIM,
-                    OUTPUT_DIM,
-                    N_LAYERS,
-                    DROPOUT,
-                    PAD_TOKEN,
-                )
-
-            out_model_file_name = (
-                "output_model_"
-                + str(data_sample_size)
-                + "_"
-                + str(N_EPOCHS)
-                + "_"
-                + model_type
-                + ".pth"
-            )
-
-            out_model_path = os.path.join(out_model_dir, out_model_file_name)
-            print("Model location: ", out_model_path)
-            exported_model.load_state_dict(
-                torch.load(
-                    out_model_path, map_location=torch.device("cpu"), weights_only=False
-                )
-            )
-            exported_model.eval()
-
-            device = "cpu"
-            # device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-            exported_model.to(device)
-
+if USE_NNET_MODEL:
+    if not os.path.exists(model_path):
+        print(
+            "USE_NNET_MODEL is enabled but no model zip at ",
+            model_path,
+            " — neural net matching disabled.",
+        )
     else:
-        exported_model = []  # tf.keras.models.load_model(model_dir_name, compile=False)
-        # Compile the model with a loss function and an optimizer
-        # exported_model.compile(loss='categorical_crossentropy', optimizer='adam', metrics = ['categorical_crossentropy'])
+        try:
+            import torch
+        except ImportError:
+            print(
+                "USE_NNET_MODEL is enabled but torch is not installed — "
+                "neural net matching disabled. Install the 'nnet' extra or torch."
+            )
+        else:
+            from .pytorch_models import (
+                LSTMTextClassifier,
+                TextClassifier,
+                TransformerClassifier,
+            )
 
-else:
-    exported_model = []
+            os.environ["CUDA_VISIBLE_DEVICES"] = MATCHER_CUDA_VISIBLE_DEVICES
+            device = "cpu"
+
+            with zipfile.ZipFile(model_path, "r") as zip_ref:
+                zip_ref.extractall(out_model_dir)
+
+            if "pytorch" in model_stub:
+
+                labels_list = [
+                    "SaoText",  # 1
+                    "SaoStartNumber",  # 2
+                    "SaoStartSuffix",  # 3
+                    "SaoEndNumber",  # 4
+                    "SaoEndSuffix",  # 5
+                    "PaoText",  # 6
+                    "PaoStartNumber",  # 7
+                    "PaoStartSuffix",  # 8
+                    "PaoEndNumber",  # 9
+                    "PaoEndSuffix",  # 10
+                    "Street",  # 11
+                    "PostTown",  # 12
+                    "AdministrativeArea",  # 13
+                    "Postcode",  # 14
+                    "IGNORE",
+                ]
+
+                if (
+                    (model_type == "transformer")
+                    | (model_type == "gru")
+                    | (model_type == "lstm")
+                ):
+                    # Load vocab and word_to_index
+                    with open(out_model_dir + "/vocab.txt", "r") as f:
+                        vocab = eval(f.read())
+                    with open(out_model_dir + "/word_to_index.txt", "r") as f:
+                        word_to_index = eval(f.read())
+                    with open(out_model_dir + "/cat_to_idx.txt", "r") as f:
+                        cat_to_idx = eval(f.read())
+
+                    VOCAB_SIZE = len(word_to_index)
+                    OUTPUT_DIM = len(cat_to_idx) + 1  # Number of classes/categories
+                    EMBEDDING_DIM = 48
+                    DROPOUT = 0.1
+                    PAD_TOKEN = 0
+
+                    if model_type == "transformer":
+                        NHEAD = 4
+                        NUM_ENCODER_LAYERS = 1
+
+                        exported_model = TransformerClassifier(
+                            VOCAB_SIZE,
+                            EMBEDDING_DIM,
+                            NHEAD,
+                            NUM_ENCODER_LAYERS,
+                            OUTPUT_DIM,
+                            DROPOUT,
+                            PAD_TOKEN,
+                        )
+
+                    elif model_type == "gru":
+                        N_LAYERS = 3
+                        HIDDEN_DIM = 128
+                        exported_model = TextClassifier(
+                            VOCAB_SIZE,
+                            EMBEDDING_DIM,
+                            HIDDEN_DIM,
+                            OUTPUT_DIM,
+                            N_LAYERS,
+                            DROPOUT,
+                            PAD_TOKEN,
+                        )
+
+                    elif model_type == "lstm":
+                        N_LAYERS = 3
+                        HIDDEN_DIM = 128
+
+                        exported_model = LSTMTextClassifier(
+                            VOCAB_SIZE,
+                            EMBEDDING_DIM,
+                            HIDDEN_DIM,
+                            OUTPUT_DIM,
+                            N_LAYERS,
+                            DROPOUT,
+                            PAD_TOKEN,
+                        )
+
+                    out_model_file_name = (
+                        "output_model_"
+                        + str(data_sample_size)
+                        + "_"
+                        + str(N_EPOCHS)
+                        + "_"
+                        + model_type
+                        + ".pth"
+                    )
+
+                    out_model_path = os.path.join(out_model_dir, out_model_file_name)
+                    print("Model location: ", out_model_path)
+                    exported_model.load_state_dict(
+                        torch.load(
+                            out_model_path,
+                            map_location=torch.device("cpu"),
+                            weights_only=False,
+                        )
+                    )
+                    exported_model.eval()
+
+                    device = "cpu"
+                    exported_model.to(device)
+
+            else:
+                exported_model = []
+
+run_nnet_match = bool(exported_model)
 
 ### ADDRESS MATCHING FUNCTIONS
-# Address matcher will try to match <batch_size> records in one go to avoid exceeding memory limits.
-batch_size = 10000
-ref_batch_size = 20000
-
-### Fuzzy match method
-
-""" https://recordlinkage.readthedocs.io/en/latest/ref_df-compare.html#recordlinkage.compare.String
- The Python Record Linkage Toolkit uses the jellyfish package for the Jaro, Jaro-Winkler, Levenshtein and Damerau- Levenshtein algorithms.
- Options are [‘jaro’, ‘jarowinkler’, ‘levenshtein’, ‘damerau_levenshtein’, ‘qgram’, ‘cosine’, ‘smith_waterman’, ‘lcs’]
-
- Comparison of some of the Jellyfish string comparison methods: https://manpages.debian.org/testing/python-jellyfish-doc/jellyfish.3.en.html """
-
-fuzzy_method = "jarowinkler"
-
-# Required overall match score for all columns to count as a match
-score_cut_off = 98.7  # 97.5
-# I set a higher score cut off for nnet street blocking based on empirical data. Under this match value I was seeing errors. This value was (.99238), but set here to .995 to be maximally stringent. It is set in 'recordlinkage_funcs.py', score_based_match function
-score_cut_off_nnet_street = 99.5  # 99.238
-# If there are no numbers in the address, then the matcher needs to get a perfect score (otherwise too many issues).
-no_number_fuzzy_match_limit = 100
-
-# Reference data 'official' column names
-ref_address_cols = [
-    "Organisation",
-    "SaoStartNumber",
-    "SaoStartSuffix",
-    "SaoEndNumber",
-    "SaoEndSuffix",
-    "SaoText",
-    "PaoStartNumber",
-    "PaoStartSuffix",
-    "PaoEndNumber",
-    "PaoEndSuffix",
-    "PaoText",
-    "Street",
-    "PostTown",
-    "Postcode",
-]
-
-# Create a list of matching variables. Text columns will be fuzzy matched.
-matching_variables = ref_address_cols
-text_columns = ["Organisation", "PaoText", "Street", "PostTown", "Postcode"]
-
-# Modify relative importance of columns (weights) for the recordlinkage part of the match. Modify weighting for scores - Town and AdministrativeArea are not very important as we have postcode. Street number and name are important
-Organisation_weight = 0.1  # Organisation weight is very low just to resolve tie breakers for very similar addresses
-PaoStartNumber_weight = 2
-SaoStartNumber_weight = 2
-Street_weight = 2
-PostTown_weight = 0
-Postcode_weight = 0.5
-AdministrativeArea_weight = 0
-# -
-
-weight_vals = [1] * len(ref_address_cols)
-weight_keys = ref_address_cols
-weights = {weight_keys[i]: weight_vals[i] for i in range(len(weight_keys))}
-
-# +
-# Modify weighting for scores - Town and AdministrativeArea are not very important as we have postcode. Street number and name are important
-
-weights["Organisation"] = Organisation_weight
-weights["SaoStartNumber"] = SaoStartNumber_weight
-weights["PaoStartNumber"] = PaoStartNumber_weight
-weights["Street"] = Street_weight
-weights["PostTown"] = PostTown_weight
-weights["Postcode"] = Postcode_weight
+# batch_size, ref_batch_size, fuzzy_method, score_cut_off, ref_address_cols, weights, etc. are set in tools/config.py (env-driven).
 
 # Creating Pydantic basemodel class
 

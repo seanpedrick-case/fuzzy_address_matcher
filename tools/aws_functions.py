@@ -1,23 +1,24 @@
-from typing import Type, List
-import pandas as pd
-import boto3
-import tempfile
 import os
-from tools.helper_functions import get_or_create_env_var
+from typing import List, Type
+
+import boto3
+import pandas as pd
+
+from tools.config import (
+    ADDRESS_MATCHER_BUCKET,
+    AWS_REGION,
+    RUN_AWS_FUNCTIONS,
+    SAVE_LOGS_TO_CSV,
+)
 
 PandasDataFrame = Type[pd.DataFrame]
 
-# Get AWS credentials if required
-bucket_name = ""
-aws_var = "RUN_AWS_FUNCTIONS"
-aws_var_default = "0"
-aws_var_val = get_or_create_env_var(aws_var, aws_var_default)
-# print(f"The value of {aws_var} is {aws_var_val}")
+bucket_name = ADDRESS_MATCHER_BUCKET
 
-if aws_var_val == "1":
+# Get AWS credentials if required
+if RUN_AWS_FUNCTIONS:
     try:
         session = boto3.Session()
-        bucket_name = os.environ["ADDRESS_MATCHER_BUCKET"]
     except Exception as e:
         bucket_name = ""
         print(e)
@@ -25,8 +26,8 @@ if aws_var_val == "1":
     def get_assumed_role_info():
         sts = boto3.client(
             "sts",
-            region_name="eu-west-2",
-            endpoint_url="https://sts.eu-west-2.amazonaws.com",
+            region_name=AWS_REGION,
+            endpoint_url=f"https://sts.{AWS_REGION}.amazonaws.com",
         )
         response = sts.get_caller_identity()
 
@@ -92,97 +93,39 @@ def download_files_from_s3(bucket_name, s3_folder, local_folder, filenames):
     """
     Download specific files from an S3 folder to a local folder.
     """
-    s3 = boto3.client("s3")
+    if RUN_AWS_FUNCTIONS:
+        s3 = boto3.client("s3")
 
-    print("Trying to download file: ", filenames)
+        print("Trying to download file: ", filenames)
 
-    if filenames == "*":
-        # List all objects in the S3 folder
-        print("Trying to download all files in AWS folder: ", s3_folder)
-        response = s3.list_objects_v2(Bucket=bucket_name, Prefix=s3_folder)
+        if filenames == "*":
+            # List all objects in the S3 folder
+            print("Trying to download all files in AWS folder: ", s3_folder)
+            response = s3.list_objects_v2(Bucket=bucket_name, Prefix=s3_folder)
 
-        print("Found files in AWS folder: ", response.get("Contents", []))
+            print("Found files in AWS folder: ", response.get("Contents", []))
 
-        filenames = [obj["Key"].split("/")[-1] for obj in response.get("Contents", [])]
-
-        print("Found filenames in AWS folder: ", filenames)
-
-    for filename in filenames:
-        object_key = os.path.join(s3_folder, filename)
-        local_file_path = os.path.join(local_folder, filename)
-
-        # Create directories if necessary
-        os.makedirs(os.path.dirname(local_file_path), exist_ok=True)
-
-        # Download the object
-        try:
-            s3.download_file(bucket_name, object_key, local_file_path)
-            print(
-                f"Downloaded 's3://{bucket_name}/{object_key}' to '{local_file_path}'"
-            )
-        except Exception as e:
-            print(f"Error downloading 's3://{bucket_name}/{object_key}':", e)
-
-
-def load_data_from_aws(in_aws_keyword_file, aws_password="", bucket_name=bucket_name):
-
-    temp_dir = tempfile.mkdtemp()
-    local_address_stub = temp_dir + "/address-match/"
-    files = []
-
-    if "LAMBETH_ADDRESS_PASSWORD" not in os.environ:
-        out_message = "Can't verify password for dataset access. Do you have a valid AWS connection? Data not loaded."
-        return files, out_message
-
-    if aws_password:
-        if (
-            "Lambeth address data example file" in in_aws_keyword_file
-            and aws_password == os.environ["LAMBETH_ADDRESS_PASSWORD"]
-        ):
-
-            s3_folder_stub = "example-data/lambeth-address-data/latest/"
-
-            local_folder_path = local_address_stub
-
-            # Check if folder exists
-            if not os.path.exists(local_folder_path):
-                print(f"Folder {local_folder_path} does not exist! Making folder.")
-
-                os.mkdir(local_folder_path)
-
-            # Check if folder is empty
-            if len(os.listdir(local_folder_path)) == 0:
-                print(f"Folder {local_folder_path} is empty")
-                # Download data
-                download_files_from_s3(
-                    bucket_name, s3_folder_stub, local_folder_path, filenames="*"
-                )
-
-                print("AWS data downloaded")
-
-            else:
-                print(f"Folder {local_folder_path} is not empty")
-
-            # files = os.listdir(local_folder_stub)
-            # print(files)
-
-            files = [
-                os.path.join(local_folder_path, f)
-                for f in os.listdir(local_folder_path)
-                if os.path.isfile(os.path.join(local_folder_path, f))
+            filenames = [
+                obj["Key"].split("/")[-1] for obj in response.get("Contents", [])
             ]
 
-            out_message = "Data successfully loaded from AWS"
-            print(out_message)
+            print("Found filenames in AWS folder: ", filenames)
 
-        else:
-            out_message = "Data not loaded from AWS"
-            print(out_message)
-    else:
-        out_message = "No password provided. Please ask the data team for access if you need this."
-        print(out_message)
+        for filename in filenames:
+            object_key = os.path.join(s3_folder, filename)
+            local_file_path = os.path.join(local_folder, filename)
 
-    return files, out_message
+            # Create directories if necessary
+            os.makedirs(os.path.dirname(local_file_path), exist_ok=True)
+
+            # Download the object
+            try:
+                s3.download_file(bucket_name, object_key, local_file_path)
+                print(
+                    f"Downloaded 's3://{bucket_name}/{object_key}' to '{local_file_path}'"
+                )
+            except Exception as e:
+                print(f"Error downloading 's3://{bucket_name}/{object_key}':", e)
 
 
 def upload_file_to_s3(
@@ -200,29 +143,31 @@ def upload_file_to_s3(
     - Message as variable/printed to console
     """
     final_out_message = []
+    final_out_message_str = ""
 
     s3_client = boto3.client("s3")
 
     if isinstance(local_file_paths, str):
         local_file_paths = [local_file_paths]
 
-    for file in local_file_paths:
-        try:
-            # Get file name off file path
-            file_name = os.path.basename(file)
+    if RUN_AWS_FUNCTIONS and SAVE_LOGS_TO_CSV:
+        for file in local_file_paths:
+            try:
+                # Get file name off file path
+                file_name = os.path.basename(file)
 
-            s3_key_full = s3_key + file_name
-            print("S3 key: ", s3_key_full)
+                s3_key_full = s3_key + file_name
+                print("S3 key: ", s3_key_full)
 
-            s3_client.upload_file(file, s3_bucket, s3_key_full)
-            out_message = "File " + file_name + " uploaded successfully!"
-            print(out_message)
+                s3_client.upload_file(file, s3_bucket, s3_key_full)
+                out_message = "File " + file_name + " uploaded successfully!"
+                print(out_message)
 
-        except Exception as e:
-            out_message = f"Error uploading file(s): {e}"
-            print(out_message)
+            except Exception as e:
+                out_message = f"Error uploading file(s): {e}"
+                print(out_message)
 
-        final_out_message.append(out_message)
-        final_out_message_str = "\n".join(final_out_message)
+            final_out_message.append(out_message)
+            final_out_message_str = "\n".join(final_out_message)
 
     return final_out_message_str

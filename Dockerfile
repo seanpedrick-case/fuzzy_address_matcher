@@ -1,55 +1,121 @@
-FROM public.ecr.aws/docker/library/python:3.11.11-slim-bookworm
+# =============================================================================
+# Stage 1: install Python dependencies (CPU PyTorch + app requirements)
+# =============================================================================
+FROM public.ecr.aws/docker/library/python:3.12.13-slim-trixie AS builder
 
-# Install Lambda web adapter in case you want to run with with an AWS Lamba function URL
-#COPY --from=public.ecr.aws/awsguru/aws-lambda-adapter:0.8.3 /lambda-adapter /opt/extensions/lambda-adapter
-
-# Update apt
-RUN apt-get update && rm -rf /var/lib/apt/lists/*
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        g++ \
+        make \
+    && pip install --upgrade pip \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
 
-COPY requirements_aws.txt .
+ARG INSTALL_NNET=False
+ENV INSTALL_NNET=${INSTALL_NNET}
 
-RUN pip install --no-cache-dir torch==2.7.1+cpu --index-url https://download.pytorch.org/whl/cpu && \
-	pip install --no-cache-dir -r requirements_aws.txt && \
-	pip install --no-cache-dir gradio==5.34.0
+COPY requirements.txt .
+COPY requirements_nnet.txt .
 
-# Set up a new user named "user" with user ID 1000
-RUN useradd -m -u 1000 user
+# Production image: omit pytest (keep it in requirements.txt for local dev / CI).
+RUN grep -v '^pytest' requirements.txt > /tmp/requirements.docker.txt \
+    && pip install --verbose --no-cache-dir --target=/install \
+        -r /tmp/requirements.docker.txt \
+    && if [ "$INSTALL_NNET" = "True" ]; then \
+        pip install --verbose --no-cache-dir --target=/install \
+            --extra-index-url https://download.pytorch.org/whl/cpu \
+            -r requirements_nnet.txt; \
+    fi \
+    && rm -f requirements.txt requirements_nnet.txt /tmp/requirements.docker.txt
 
-# Change ownership of /home/user directory
-RUN chown -R user:user /home/user
+# =============================================================================
+# Stage 2: Gradio runtime (non-root). No Lambda stage — use a separate image later if needed.
+# =============================================================================
+FROM public.ecr.aws/docker/library/python:3.12.13-slim-trixie AS gradio
 
-# Make output folder
-RUN mkdir -p /home/user/app/output && chown -R user:user /home/user/app/output && \
-	mkdir -p /home/user/app/output/api && chown -R user:user /home/user/app/output/api && \
-	mkdir -p /home/user/app/api && chown -R user:user /home/user/app/api && \
-	chown -R user:user /home/user/app
+RUN apt-get update \
+    && apt-get upgrade -y \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
-# Switch to the "user" user
+ENV APP_HOME=/home/user
+
+# Align with tools/constants.py (GRADIO_OUTPUT_FOLDER) and tools/config.py (CONFIG_FOLDER, APP_CONFIG_PATH).
+# Paths are under the app working directory so relative feedback/logs/usage trees work (see app.py).
+ENV GRADIO_TEMP_DIR=/tmp/gradio_tmp/ \
+    GRADIO_OUTPUT_FOLDER=$APP_HOME/app/output/ \
+    GRADIO_INPUT_FOLDER=$APP_HOME/app/input/ \
+    CONFIG_FOLDER=$APP_HOME/app/config/ \
+    MPLCONFIGDIR=/tmp/matplotlib_cache/ \
+    XDG_CACHE_HOME=/tmp/xdg_cache/user_1000 \
+    GRADIO_SERVER_NAME=0.0.0.0 \
+    GRADIO_SERVER_PORT=7860 \
+    PATH=$APP_HOME/.local/bin:$PATH \
+    PYTHONPATH=$APP_HOME/app \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    GRADIO_ALLOW_FLAGGING=never \
+    GRADIO_NUM_PORTS=1 \
+    GRADIO_ANALYTICS_ENABLED=False
+
+COPY --from=builder /install /usr/local/lib/python3.12/site-packages/
+COPY --from=builder /install/bin /usr/local/bin/
+
+COPY . ${APP_HOME}/app
+COPY entrypoint.sh ${APP_HOME}/app/entrypoint.sh
+
+RUN sed -i 's/\r$//' ${APP_HOME}/app/entrypoint.sh \
+    && chmod +x ${APP_HOME}/app/entrypoint.sh
+
+WORKDIR ${APP_HOME}/app
+
+RUN useradd -m -u 1000 user \
+    && mkdir -p ${APP_HOME}/app \
+    && chown user:user ${APP_HOME}/app
+
+RUN mkdir -p \
+    ${APP_HOME}/app/output \
+    ${APP_HOME}/app/input \
+    ${APP_HOME}/app/logs \
+    ${APP_HOME}/app/usage \
+    ${APP_HOME}/app/feedback \
+    ${APP_HOME}/app/config \
+    && chown user:user \
+    ${APP_HOME}/app/output \
+    ${APP_HOME}/app/input \
+    ${APP_HOME}/app/logs \
+    ${APP_HOME}/app/usage \
+    ${APP_HOME}/app/feedback \
+    ${APP_HOME}/app/config \
+    && chmod 755 \
+    ${APP_HOME}/app/output \
+    ${APP_HOME}/app/input \
+    ${APP_HOME}/app/logs \
+    ${APP_HOME}/app/usage \
+    ${APP_HOME}/app/feedback \
+    ${APP_HOME}/app/config
+
+RUN mkdir -p /tmp/gradio_tmp /tmp/matplotlib_cache /tmp/xdg_cache/user_1000 \
+    && chown user:user /tmp/gradio_tmp /tmp/matplotlib_cache /tmp/xdg_cache/user_1000 \
+    && chmod 1777 /tmp/gradio_tmp \
+    && chmod 700 /tmp/xdg_cache/user_1000
+
+RUN chown -R user:user /home/user \
+    && chmod 755 /usr/local/bin/python
+
+VOLUME ["/tmp/gradio_tmp"]
+VOLUME ["/tmp/matplotlib_cache"]
+VOLUME ["/home/user/app/output"]
+VOLUME ["/home/user/app/input"]
+VOLUME ["/home/user/app/logs"]
+VOLUME ["/home/user/app/usage"]
+VOLUME ["/home/user/app/feedback"]
+VOLUME ["/home/user/app/config"]
+
 USER user
 
-# Set home to the user's home directory
-ENV HOME=/home/user \
-	PATH=/home/user/.local/bin:$PATH \
-    PYTHONPATH=$HOME/app \
-	PYTHONUNBUFFERED=1 \
-	PYTHONDONTWRITEBYTECODE=1 \
-	GRADIO_ALLOW_FLAGGING=never \
-	GRADIO_NUM_PORTS=1 \
-	GRADIO_SERVER_NAME=0.0.0.0 \
-	GRADIO_SERVER_PORT=7861 \
-	GRADIO_THEME=huggingface \
-	AWS_STS_REGIONAL_ENDPOINT=regional \
-	#GRADIO_TEMP_DIR=$HOME/tmp \
-	#GRADIO_ROOT_PATH=/address-match \
-	SYSTEM=spaces
- 
-# Set the working directory to the user's home directory
-WORKDIR $HOME/app
+EXPOSE 7860
 
-# Copy the current directory contents into the container at $HOME/app setting the owner to the user
-COPY --chown=user . $HOME/app
-#COPY . $HOME/app
-
-CMD ["python", "app.py"]
+ENTRYPOINT ["/home/user/app/entrypoint.sh"]

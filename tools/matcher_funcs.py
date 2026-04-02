@@ -1,49 +1,40 @@
+import copy
+import math
 import os
+import re
+import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from datetime import datetime
+from typing import Dict, List, Optional, Tuple, Type
+
+import gradio as gr
 import numpy as np
 import pandas as pd
-
-from typing import Dict, List, Tuple, Type, Optional
-import time
-import re
-import math
-from datetime import datetime
-import copy
-from concurrent.futures import ProcessPoolExecutor, as_completed
-import gradio as gr
 from tqdm import tqdm
 
-from tools.constants import (
-    InitMatch,
-    MatcherClass,
+# API functions
+from tools.addressbase_api_funcs import places_api_query
+from tools.config import (
+    MAX_PARALLEL_WORKERS,
+    RUN_BATCHES_IN_PARALLEL,
+    USE_POSTCODE_BLOCKER,
     batch_size,
     filter_to_lambeth_pcodes,
     max_predict_len,
     output_folder,
     ref_batch_size,
 )
-
-from tools.config import (
-    USE_POSTCODE_BLOCKER,
-    MAX_PARALLEL_WORKERS,
-    RUN_BATCHES_IN_PARALLEL,
-)
-
-# Imports (must be module-level)
-from tools.preparation import (
-    prepare_search_address_string,
-    prepare_search_address,
-    extract_street_name,
-    prepare_ref_address,
-    remove_non_postal,
-    check_no_number_addresses,
-    extract_postcode,
+from tools.constants import (
+    InitMatch,
+    MatcherClass,
+    run_nnet_match,
 )
 from tools.fuzzy_match import (
-    string_match_by_post_code_multiple,
     _create_fuzzy_match_results_output,
     create_results_df,
+    string_match_by_post_code_multiple,
 )
-from tools.standardise import standardise_wrapper_func, remove_postcode
+from tools.helper_functions import initial_data_load, sum_numbers_before_seconds
 
 # Neural network functions
 ### Predict function for imported model
@@ -52,11 +43,19 @@ from tools.model_predict import (
     full_predict_torch,
     post_predict_clean,
 )
-from tools.recordlinkage_funcs import score_based_match
-from tools.helper_functions import initial_data_load, sum_numbers_before_seconds
 
-# API functions
-from tools.addressbase_api_funcs import places_api_query
+# Imports (must be module-level)
+from tools.preparation import (
+    check_no_number_addresses,
+    extract_postcode,
+    extract_street_name,
+    prepare_ref_address,
+    prepare_search_address,
+    prepare_search_address_string,
+    remove_non_postal,
+)
+from tools.recordlinkage_funcs import score_based_match
+from tools.standardise import remove_postcode, standardise_wrapper_func
 
 # (max_predict_len, MatcherClass imported above)
 
@@ -72,7 +71,6 @@ today_month_rev = datetime.now().strftime("%Y%m")
 
 # Constants
 run_fuzzy_match = True
-run_nnet_match = True
 run_standardise = True
 
 # Load in data functions
@@ -1760,35 +1758,29 @@ def run_matcher(
     if OutputMatch.output_summary == "":
         OutputMatch.output_summary = "No matches were found."
 
-    fuzzy_not_std_output = OutputMatch.match_results_output.copy()
-    fuzzy_not_std_output_mask = ~(
-        fuzzy_not_std_output["match_method"].str.contains("Fuzzy match")
-    ) | (fuzzy_not_std_output["standardised_address"])
-    fuzzy_not_std_output.loc[fuzzy_not_std_output_mask, "full_match"] = False
-    fuzzy_not_std_summary = create_match_summary(
-        fuzzy_not_std_output, "Fuzzy not standardised"
+    final_summary = build_run_summary_text(
+        OutputMatch.results_on_orig_df,
+        diagnostics_df=OutputMatch.match_results_output,
+        key_field=OutputMatch.search_df_key_field,
+        use_postcode_blocker_requested=getattr(
+            OutputMatch, "use_postcode_blocker_requested", None
+        ),
+        use_postcode_blocker_effective=getattr(
+            OutputMatch, "use_postcode_blocker_effective", None
+        ),
     )
-
-    fuzzy_std_output = OutputMatch.match_results_output.copy()
-    fuzzy_std_output_mask = fuzzy_std_output["match_method"].str.contains("Fuzzy match")
-    fuzzy_std_output.loc[~fuzzy_std_output_mask, "full_match"] = False
-    fuzzy_std_summary = create_match_summary(fuzzy_std_output, "Fuzzy standardised")
-
-    nnet_std_output = OutputMatch.match_results_output.copy()
-    nnet_std_summary = create_match_summary(nnet_std_output, "Neural net standardised")
-
-    final_summary = (
-        fuzzy_not_std_summary
-        + "\n"
-        + fuzzy_std_summary
-        + "\n"
-        + nnet_std_summary
-        + "\n"
-        + time_out
-    )
+    final_summary = final_summary + "\n\n" + time_out
 
     estimate_total_processing_time = sum_numbers_before_seconds(time_out)
     print("Estimated total processing time:", str(estimate_total_processing_time))
+
+    # Build/export a results-based summary table (eligible-only percentages)
+    summary_table_df = build_results_summary_table(OutputMatch.results_on_orig_df)
+    summary_table_md = "## Summary table\n\n" + results_summary_table_to_markdown(
+        summary_table_df
+    )
+    summary_table_name = output_folder + "summary_" + today_rev + ".csv"
+    summary_table_df.to_csv(summary_table_name, index=False)
 
     _em_col = None
     if OutputMatch.existing_match_cols:
@@ -1806,46 +1798,56 @@ def run_matcher(
     )
 
     # Also attach the search-side in_existing value onto the diagnostics output so it can be
-    # audited alongside match scores/methods. This is a left-join from the prepared search df.
-    if _em_col and (
-        OutputMatch.search_df_key_field in OutputMatch.search_df_cleaned.columns
-    ):
+    # audited alongside match scores/methods. Use the original/pre-filter search df because
+    # `search_df_cleaned` typically only contains key/full_address/postcode.
+    if _em_col:
         diag_output_col = f"{_em_col} (from search data)"
-        if diag_output_col not in OutputMatch.match_results_output.columns:
-            _src_col = None
-            if _em_col in OutputMatch.search_df_cleaned.columns:
-                _src_col = _em_col
-            else:
-                _alt = f"__search_side_{_em_col}"
-                if _alt in OutputMatch.search_df_cleaned.columns:
-                    _src_col = _alt
+        needs_fill = (
+            diag_output_col not in OutputMatch.match_results_output.columns
+        ) or OutputMatch.match_results_output[diag_output_col].isna().all()
+        if needs_fill and (
+            OutputMatch.search_df_key_field in OutputMatch.match_results_output.columns
+        ):
+            source_df = getattr(OutputMatch, "pre_filter_search_df", pd.DataFrame())
+            if source_df is None or source_df.empty:
+                source_df = getattr(OutputMatch, "search_df", pd.DataFrame())
 
-            if _src_col:
-                _map_df = OutputMatch.search_df_cleaned[
-                    [OutputMatch.search_df_key_field, _src_col]
-                ].copy()
-                _map_df = _map_df.rename(columns={_src_col: diag_output_col})
-                _map_df[OutputMatch.search_df_key_field] = _map_df[
-                    OutputMatch.search_df_key_field
-                ].astype(str)
-                if (
-                    OutputMatch.search_df_key_field
-                    in OutputMatch.match_results_output.columns
-                ):
-                    OutputMatch.match_results_output[
-                        OutputMatch.search_df_key_field
-                    ] = OutputMatch.match_results_output[
-                        OutputMatch.search_df_key_field
-                    ].astype(
-                        str
-                    )
-                OutputMatch.match_results_output = (
-                    OutputMatch.match_results_output.merge(
-                        _map_df,
-                        on=OutputMatch.search_df_key_field,
-                        how="left",
+            _src_col = None
+            if isinstance(source_df, pd.DataFrame) and (not source_df.empty):
+                if _em_col in source_df.columns:
+                    _src_col = _em_col
+                else:
+                    _alt = f"__search_side_{_em_col}"
+                    if _alt in source_df.columns:
+                        _src_col = _alt
+
+            if _src_col and (OutputMatch.search_df_key_field in source_df.columns):
+                # Use a key->value map to avoid merge column collisions (`_x`/`_y`).
+                _map = (
+                    source_df[[OutputMatch.search_df_key_field, _src_col]]
+                    .copy()
+                    .drop_duplicates(
+                        subset=[OutputMatch.search_df_key_field], keep="first"
                     )
                 )
+                _map[OutputMatch.search_df_key_field] = _map[
+                    OutputMatch.search_df_key_field
+                ].astype(str)
+                _series_map = _map.set_index(OutputMatch.search_df_key_field)[_src_col]
+
+                _keys = OutputMatch.match_results_output[
+                    OutputMatch.search_df_key_field
+                ].astype(str)
+                mapped_vals = _keys.map(_series_map)
+
+                if diag_output_col in OutputMatch.match_results_output.columns:
+                    OutputMatch.match_results_output[diag_output_col] = (
+                        OutputMatch.match_results_output[diag_output_col].fillna(
+                            mapped_vals
+                        )
+                    )
+                else:
+                    OutputMatch.match_results_output[diag_output_col] = mapped_vals
 
     # Ensure final output files are written once from the merged result.
     essential_results_cols = [
@@ -1886,10 +1888,14 @@ def run_matcher(
         )
 
     output_files.extend(
-        [OutputMatch.results_orig_df_name, OutputMatch.match_outputs_name]
+        [
+            OutputMatch.results_orig_df_name,
+            OutputMatch.match_outputs_name,
+            summary_table_name,
+        ]
     )
 
-    return final_summary, output_files, estimate_total_processing_time
+    return final_summary, output_files, estimate_total_processing_time, summary_table_md
 
 
 # Run a match run for a single batch
@@ -3316,46 +3322,60 @@ def combine_two_matches(
         _em_col_btch,
     )
 
-    # Attach search-side in_existing value onto diagnostics output as well.
-    if _em_col_btch and (
-        NewMatchClass.search_df_key_field in NewMatchClass.search_df_cleaned.columns
-    ):
+    # Attach search-side in_existing value onto diagnostics output as well. Use the
+    # original/pre-filter search df because `search_df_cleaned` typically only contains
+    # key/full_address/postcode.
+    if _em_col_btch:
         diag_output_col = f"{_em_col_btch} (from search data)"
-        if diag_output_col not in NewMatchClass.match_results_output.columns:
-            _src_col = None
-            if _em_col_btch in NewMatchClass.search_df_cleaned.columns:
-                _src_col = _em_col_btch
-            else:
-                _alt = f"__search_side_{_em_col_btch}"
-                if _alt in NewMatchClass.search_df_cleaned.columns:
-                    _src_col = _alt
+        needs_fill = (
+            diag_output_col not in NewMatchClass.match_results_output.columns
+        ) or NewMatchClass.match_results_output[diag_output_col].isna().all()
+        if needs_fill and (
+            NewMatchClass.search_df_key_field
+            in NewMatchClass.match_results_output.columns
+        ):
+            source_df = getattr(NewMatchClass, "pre_filter_search_df", pd.DataFrame())
+            if source_df is None or source_df.empty:
+                source_df = getattr(NewMatchClass, "search_df", pd.DataFrame())
 
-            if _src_col:
-                _map_df = NewMatchClass.search_df_cleaned[
-                    [NewMatchClass.search_df_key_field, _src_col]
-                ].copy()
-                _map_df = _map_df.rename(columns={_src_col: diag_output_col})
-                _map_df[NewMatchClass.search_df_key_field] = _map_df[
-                    NewMatchClass.search_df_key_field
-                ].astype(str)
-                if (
-                    NewMatchClass.search_df_key_field
-                    in NewMatchClass.match_results_output.columns
-                ):
-                    NewMatchClass.match_results_output[
-                        NewMatchClass.search_df_key_field
-                    ] = NewMatchClass.match_results_output[
-                        NewMatchClass.search_df_key_field
-                    ].astype(
-                        str
-                    )
-                NewMatchClass.match_results_output = (
-                    NewMatchClass.match_results_output.merge(
-                        _map_df,
-                        on=NewMatchClass.search_df_key_field,
-                        how="left",
+            _src_col = None
+            if isinstance(source_df, pd.DataFrame) and (not source_df.empty):
+                if _em_col_btch in source_df.columns:
+                    _src_col = _em_col_btch
+                else:
+                    _alt = f"__search_side_{_em_col_btch}"
+                    if _alt in source_df.columns:
+                        _src_col = _alt
+
+            if _src_col and (NewMatchClass.search_df_key_field in source_df.columns):
+                # Use a key->value map to avoid merge column collisions (`_x`/`_y`).
+                _map = (
+                    source_df[[NewMatchClass.search_df_key_field, _src_col]]
+                    .copy()
+                    .drop_duplicates(
+                        subset=[NewMatchClass.search_df_key_field], keep="first"
                     )
                 )
+                _map[NewMatchClass.search_df_key_field] = _map[
+                    NewMatchClass.search_df_key_field
+                ].astype(str)
+                _series_map = _map.set_index(NewMatchClass.search_df_key_field)[
+                    _src_col
+                ]
+
+                _keys = NewMatchClass.match_results_output[
+                    NewMatchClass.search_df_key_field
+                ].astype(str)
+                mapped_vals = _keys.map(_series_map)
+
+                if diag_output_col in NewMatchClass.match_results_output.columns:
+                    NewMatchClass.match_results_output[diag_output_col] = (
+                        NewMatchClass.match_results_output[diag_output_col].fillna(
+                            mapped_vals
+                        )
+                    )
+                else:
+                    NewMatchClass.match_results_output[diag_output_col] = mapped_vals
 
     # Only keep essential columns
     essential_results_cols = [
@@ -3450,3 +3470,377 @@ def create_match_summary(match_results_output: PandasDataFrame, df_name: str) ->
     )
 
     return summary
+
+
+def build_run_summary_text(
+    results_df: pd.DataFrame,
+    diagnostics_df: Optional[pd.DataFrame],
+    key_field: str,
+    use_postcode_blocker_requested: Optional[bool] = None,
+    use_postcode_blocker_effective: Optional[bool] = None,
+) -> str:
+    """
+    Create a clearer, user-facing summary for the GUI.
+
+    Percentages are calculated over *eligible* records only (excluding 'Previously matched'
+    and other excluded categories).
+    """
+    if results_df is None or results_df.empty:
+        return "No results were produced."
+
+    out = results_df.copy()
+    if "Matched with reference address" not in out.columns:
+        out["Matched with reference address"] = False
+
+    eligible_mask = _eligible_mask_from_results(out)
+    eligible_total = int(eligible_mask.sum())
+    all_total = int(len(out))
+    excluded_total = int(all_total - eligible_total)
+    matched_total = int(
+        out.loc[eligible_mask, "Matched with reference address"]
+        .fillna(False)
+        .astype(bool)
+        .sum()
+    )
+    eligible_unmatched = int(eligible_total - matched_total)
+
+    attempted_total = None
+    not_attempted_total = None
+    stage_lines = []
+    neural_net_ran = False
+    if (
+        diagnostics_df is not None
+        and isinstance(diagnostics_df, pd.DataFrame)
+        and (not diagnostics_df.empty)
+        and key_field in diagnostics_df.columns
+        and "fuzzy_score" in diagnostics_df.columns
+    ):
+        # Attempted = eligible keys that have a non-zero fuzzy_score recorded in diagnostics.
+        diag = diagnostics_df[[key_field, "fuzzy_score"]].copy()
+        diag[key_field] = diag[key_field].astype(str)
+        # Reduce to best available signal per record
+        diag_best = diag.groupby(key_field, dropna=False)["fuzzy_score"].max()
+        eligible_keys = set(out.loc[eligible_mask, key_field].astype(str).tolist())
+        attempted_mask = (
+            diag_best.index.isin(eligible_keys) & diag_best.notna() & (diag_best != 0.0)
+        )
+        attempted_total = int(attempted_mask.sum())
+        not_attempted_total = max(eligible_total - attempted_total, 0)
+
+        # Matched-by-stage counts (eligible keys only), if stage columns exist.
+        if (
+            "full_match" in diagnostics_df.columns
+            and "match_method" in diagnostics_df.columns
+            and "standardised_address" in diagnostics_df.columns
+        ):
+            eligible_keys = set(out.loc[eligible_mask, key_field].astype(str).tolist())
+            diag_stage = diagnostics_df[
+                [key_field, "match_method", "standardised_address", "full_match"]
+            ].copy()
+            diag_stage[key_field] = diag_stage[key_field].astype(str)
+            diag_stage["full_match"] = (
+                diag_stage["full_match"].fillna(False).astype(bool)
+            )
+            diag_stage["standardised_address"] = (
+                diag_stage["standardised_address"].fillna(False).astype(bool)
+            )
+            diag_stage = diag_stage[diag_stage[key_field].isin(eligible_keys)]
+
+            def _stage_matched(mask: pd.Series) -> int:
+                if mask is None or not mask.any():
+                    return 0
+                keys = diag_stage.loc[
+                    mask & diag_stage["full_match"], key_field
+                ].unique()
+                return int(len(keys))
+
+            mm = diag_stage["match_method"].fillna("").astype(str)
+            fuzzy_mask = mm.str.contains("Fuzzy match", na=False)
+            nn_mask = mm.str.contains("Neural net", na=False)
+            neural_net_ran = bool(nn_mask.any())
+
+            fuzzy_not_std_count = _stage_matched(
+                fuzzy_mask & (~diag_stage["standardised_address"])
+            )
+            fuzzy_std_count = _stage_matched(
+                fuzzy_mask & (diag_stage["standardised_address"])
+            )
+            nn_std_count = _stage_matched(nn_mask)
+
+            stage_lines.append("## Matched by stage (eligible records only)")
+            stage_lines.append(
+                f"- **Fuzzy (not standardised)**: {fuzzy_not_std_count}"
+                + (
+                    f" ({round(fuzzy_not_std_count/eligible_total*100,1)}%)"
+                    if eligible_total
+                    else ""
+                )
+            )
+            stage_lines.append(
+                f"- **Fuzzy (standardised)**: {fuzzy_std_count}"
+                + (
+                    f" ({round(fuzzy_std_count/eligible_total*100,1)}%)"
+                    if eligible_total
+                    else ""
+                )
+            )
+            (
+                stage_lines.append(
+                    f"- **Neural net (standardised)**: {nn_std_count}"
+                    + (
+                        f" ({round(nn_std_count/eligible_total*100,1)}%)"
+                        if eligible_total
+                        else ""
+                    )
+                )
+                if neural_net_ran
+                else None
+            )
+
+            # Remove any Nones introduced by conditional stage lines
+            stage_lines = [ln for ln in stage_lines if ln]
+
+    lines = []
+    lines.append("## Match summary (eligible records only)")
+    lines.append(f"- **Total input records**: {all_total}")
+    lines.append(
+        f"- **Excluded from matching**: {excluded_total} (e.g. previously matched, blank/invalid address)"
+    )
+    lines.append(f"- **Eligible for matching**: {eligible_total}")
+    if eligible_total > 0:
+        lines.append(
+            f"- **Matched**: {matched_total} ({round(matched_total/eligible_total*100,1)}%)"
+        )
+        lines.append(
+            f"- **Eligible but unmatched**: {eligible_unmatched} ({round(eligible_unmatched/eligible_total*100,1)}%)"
+        )
+    else:
+        lines.append("- **Matched**: 0 (0.0%)")
+        lines.append("- **Eligible but unmatched**: 0 (0.0%)")
+
+    if (
+        attempted_total is not None
+        and not_attempted_total is not None
+        and eligible_total > 0
+    ):
+        lines.append(
+            f"- **Attempted**: {attempted_total} ({round(attempted_total/eligible_total*100,1)}%)"
+        )
+        lines.append(
+            f"- **Not attempted**: {not_attempted_total} ({round(not_attempted_total/eligible_total*100,1)}%)"
+        )
+        lines.append(
+            "- **What 'not attempted' means**: the record was eligible, but no candidate match was scored (often because blocking produced no candidates)."
+        )
+
+    if use_postcode_blocker_requested is not None:
+        mode_bits = []
+        mode_bits.append(
+            f"requested={'postcode' if use_postcode_blocker_requested else 'street-only'}"
+        )
+        if use_postcode_blocker_effective is not None:
+            mode_bits.append(
+                f"effective={'postcode' if use_postcode_blocker_effective else 'street-only'}"
+            )
+        lines.append(f"- **Blocking mode**: {', '.join(mode_bits)}")
+
+    lines.append("")
+    lines.append("## What the stages mean")
+    lines.append(
+        "- **Fuzzy not standardised**: fuzzy matching on minimally cleaned text."
+    )
+    lines.append(
+        "- **Fuzzy standardised**: fuzzy matching after full standardisation (more normalization; often improves recall)."
+    )
+    if neural_net_ran:
+        lines.append(
+            "- **Neural net standardised**: ML model stage; uses standardised inputs and can confirm/extend fuzzy matches."
+        )
+
+    # Top exclusion reasons
+    excl_counts = (
+        out.loc[~eligible_mask, "Excluded from search"]
+        .fillna("")
+        .astype(str)
+        .str.strip()
+        .replace("", "Excluded (unspecified)")
+        .value_counts()
+        .head(5)
+    )
+    if not excl_counts.empty:
+        lines.append("")
+        lines.append("## Top exclusion reasons")
+        for k, v in excl_counts.items():
+            lines.append(f"- **{k}**: {int(v)}")
+
+    if stage_lines:
+        lines.append("")
+        lines.extend(stage_lines)
+
+    return "\n".join(lines)
+
+
+def _eligible_mask_from_results(results_df: pd.DataFrame) -> pd.Series:
+    """
+    Determine which records are eligible for matching-rate denominators.
+
+    We exclude rows that were not searched (e.g. 'Previously matched', blank/invalid address,
+    missing blocker values, etc.) based on the 'Excluded from search' field.
+    """
+    if results_df is None or results_df.empty:
+        return pd.Series([], dtype=bool)
+
+    excluded = (
+        results_df.get("Excluded from search", pd.Series("", index=results_df.index))
+        .fillna("")
+        .astype(str)
+        .str.strip()
+    )
+    # Treat these as not eligible for measuring matcher effectiveness.
+    not_eligible_values = {
+        "Previously matched",
+        "Excluded - blank address",
+        "Excluded - non-postal address",
+        "Excluded - blank street",
+        "Excluded - blank postcode",
+    }
+    return ~excluded.isin(not_eligible_values)
+
+
+def build_results_summary_table(results_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Build a compact, results-based summary table with counts and pct_of_eligible.
+    """
+    if results_df is None or results_df.empty:
+        return pd.DataFrame(
+            columns=[
+                "Included in search",
+                "Reason for exclusion",
+                "Matched with reference address",
+                "count",
+                "pct_of_eligible",
+            ]
+        )
+
+    out = results_df.copy()
+    if "Matched with reference address" not in out.columns:
+        out["Matched with reference address"] = False
+
+    eligible_mask = _eligible_mask_from_results(out)
+    eligible_total = int(eligible_mask.sum())
+
+    # Derive user-friendly grouping columns
+    raw_excl = (
+        out.get("Excluded from search", pd.Series("", index=out.index))
+        .fillna("")
+        .astype(str)
+        .str.strip()
+    )
+    # Normalise common “included” representations so reasons don’t get lost.
+    is_included = raw_excl.isin(["", "False", "0", "Included in search"])
+    excl_reason = raw_excl.where(~is_included, other="Included in search").replace(
+        "", "Included in search"
+    )
+
+    out["_included_excluded"] = np.where(
+        is_included, "Included in search", "Excluded from search"
+    )
+    out["_reason_for_exclusion"] = excl_reason.where(
+        ~is_included, other="Included in search"
+    )
+
+    grp = (
+        out.assign(_eligible=eligible_mask)
+        .groupby(
+            [
+                "_included_excluded",
+                "_reason_for_exclusion",
+                "Matched with reference address",
+                "_eligible",
+            ],
+            dropna=False,
+        )
+        .size()
+        .reset_index(name="count")
+    )
+
+    # Only compute pct_of_eligible for eligible rows; excluded rows get blank.
+    grp["pct_of_eligible"] = ""
+    if eligible_total > 0:
+        eligible_rows = grp["_eligible"].astype(bool)
+        grp.loc[eligible_rows, "pct_of_eligible"] = (
+            (grp.loc[eligible_rows, "count"] / eligible_total * 100)
+            .round(1)
+            .astype(str)
+        )
+
+    grp = grp.drop(columns=["_eligible"])
+    grp = grp.rename(
+        columns={
+            "_included_excluded": "Included in search",
+            "_reason_for_exclusion": "Reason for exclusion",
+            "pct_of_eligible": "Percentage of eligible records (%)",
+            "count": "Count",
+        }
+    )
+
+    # Add grand total row at bottom
+    total_row = pd.DataFrame(
+        [
+            {
+                "Included in search": "Grand total",
+                "Reason for exclusion": "",
+                "Matched with reference address": "",
+                "Count": int(len(out)),
+                "Percentage of eligible records (%)": "",
+            }
+        ]
+    )
+
+    grp = grp.sort_values(
+        [
+            "Included in search",
+            "Reason for exclusion",
+            "Matched with reference address",
+        ],
+        kind="stable",
+    )
+    return pd.concat([grp, total_row], ignore_index=True)
+
+
+def results_summary_table_to_markdown(summary_df: pd.DataFrame) -> str:
+    """
+    Convert the summary table to a simple markdown table string for the GUI.
+    """
+    if summary_df is None or summary_df.empty:
+        return "No summary available."
+
+    df = summary_df.copy()
+    # Keep column order stable (must match build_results_summary_table renames)
+    preferred = [
+        "Included in search",
+        "Reason for exclusion",
+        "Matched with reference address",
+        "Count",
+        "Percentage of eligible records (%)",
+    ]
+    cols = [c for c in preferred if c in df.columns]
+    # Fallback if older column names are present
+    if not cols:
+        legacy = [
+            "Included/Excluded",
+            "Reason for exclusion",
+            "Matched with reference address",
+            "count",
+            "pct_of_eligible",
+        ]
+        cols = [c for c in legacy if c in df.columns]
+    df = df[cols]
+
+    # Manual markdown for stability (avoid deps / pandas version differences)
+    header = "| " + " | ".join(cols) + " |"
+    sep = "| " + " | ".join(["---"] * len(cols)) + " |"
+    rows = []
+    for _, r in df.iterrows():
+        rows.append("| " + " | ".join(str(r.get(c, "")) for c in cols) + " |")
+    return "\n".join([header, sep] + rows)

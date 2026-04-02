@@ -1,8 +1,9 @@
 # %%
+import time
 import urllib
 from datetime import datetime
+
 import pandas as pd
-import time
 import requests
 
 today_rev = datetime.now().strftime("%Y%m%d")

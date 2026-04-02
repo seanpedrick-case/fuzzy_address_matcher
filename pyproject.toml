@@ -1,0 +1,98 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fuzzy_address_matcher"
+version = "1.0.0"
+description = "Match tabular address datasets together using address standardisation, rapidfuzz, and exact text matching via a Gradio GUI."
+readme = "README.md"
+authors = [
+    { name = "Sean Pedrick-Case", email = "spedrickcase@lambeth.gov.uk" },
+]
+maintainers = [
+    { name = "Sean Pedrick-Case", email = "spedrickcase@lambeth.gov.uk" },
+]
+license = { text = "AGPL-3.0-only" }
+keywords = [
+    "address-matching",
+    "fuzzy-matching",
+    "record-linkage",
+    "gradio",
+    "llpg",
+    "lpi",
+    "uprn",
+    "uk-addresses",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+requires-python = ">=3.10"
+# Core runtime deps (aligned with requirements.txt). For the neural-net stage,
+# install PyTorch: pip install '.[nnet]' or pip install --extra-index-url https://download.pytorch.org/whl/cpu 'torch<=2.9.1'
+dependencies = [
+    "pandas<=2.33",
+    "rapidfuzz<=3.14.3",
+    "recordlinkage<=0.16",
+    "pyap<=0.3.1",
+    "pyarrow<=23.0.1",
+    "openpyxl<=3.1.5",
+    "gradio==6.10.0",
+    "boto3<=1.42.80",
+    "polars<=1.39.3",
+    "numpy<=2.4.3",
+    "requests<=2.33.1",
+    "bleach<=6.3.0",
+    "python-dotenv<=1.2.2",
+]
+
+[project.optional-dependencies]
+nnet = ["torch<=2.9.1"]
+dev = ["pytest<=9.0.2"]
+test = ["pytest<=9.0.2", "pytest-cov"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["tools*"]
+
+# Configuration for Ruff linter:
+[tool.ruff]
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = [
+    "E501",  # line-too-long (handled with Black)
+    "E402",  # module-import-not-at-top-of-file (sometimes needed for conditional imports)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]  # Allow unused imports in __init__.py
+
+# Configuration for a Black formatter:
+[tool.black]
+line-length = 88
+target-version = ["py310"]
+
+# Configuration for pytest:
+[tool.pytest.ini_options]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
+testpaths = ["test"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "-v",
+    "--tb=short",
+    "--strict-markers",
+    "--disable-warnings",
+]

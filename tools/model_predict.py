@@ -1,9 +1,9 @@
 # import tensorflow as tf # Tensorflow use deprecated
-import torch
-import pandas as pd
-import numpy as np
-from typing import Type, Dict, List, Tuple
 from datetime import datetime
+from typing import Dict, List, Tuple, Type
+
+import numpy as np
+import pandas as pd
 
 PandasDataFrame = Type[pd.DataFrame]
 PandasSeries = Type[pd.Series]
@@ -189,7 +189,7 @@ def full_predict_func(list_to_predict, model, vocab, labels_list):
 
 
 def predict_torch(model, model_type, input_text, word_to_index, device):
-    # print(device)
+    import torch
 
     # Convert input_text to tensor of character indices
     indexed_texts = [

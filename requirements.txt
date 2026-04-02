@@ -1,5 +1,6 @@
---extra-index-url https://download.pytorch.org/whl/cpu
-torch<=2.9.1 
+# PyTorch (neural-net stage): install separately, e.g.
+#   pip install -r requirements_nnet.txt
+# or: pip install '.[nnet]' (see pyproject.toml)
 pandas<=2.33
 rapidfuzz<=3.14.3
 recordlinkage<=0.16
@@ -13,3 +14,4 @@ polars<=1.39.3
 numpy<=2.4.3
 requests<=2.33.1
 bleach<=6.3.0
+python-dotenv<=1.2.2

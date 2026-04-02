@@ -1,11 +1,12 @@
-import pandas as pd
-from typing import Type, Dict, List, Tuple
-from datetime import datetime
-
 # import polars as pl
 import re
-from tqdm import tqdm
+from datetime import datetime
+from typing import Dict, List, Tuple, Type
+
+import pandas as pd
 from gradio import Progress
+from tqdm import tqdm
+
 from tools.standardise import remove_postcode
 
 tqdm.pandas()  # Registers the progress_apply method

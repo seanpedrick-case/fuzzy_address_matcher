@@ -1,27 +1,10 @@
-import gradio as gr
-import pandas as pd
 import os
 import re
 
+import gradio as gr
+import pandas as pd
 
-def get_or_create_env_var(var_name, default_value):
-    # Get the environment variable if it exists
-    value = os.environ.get(var_name)
-
-    # If it doesn't exist, set it to the default value
-    if value is None:
-        os.environ[var_name] = default_value
-        value = default_value
-
-    return value
-
-
-# Retrieving or setting output folder
-env_var_name = "GRADIO_OUTPUT_FOLDER"
-default_value = "output/"
-
-output_folder = get_or_create_env_var(env_var_name, default_value)
-# print(f"The value of {env_var_name} is {output_folder}")
+from tools.config import get_or_create_env_var
 
 
 def detect_file_type(filename):
@@ -56,16 +39,18 @@ def initial_data_load(in_file):
     new_choices = []
     concat_choices = []
     output_message = ""
+    data_file_names_end = []
     results_df = pd.DataFrame()
     df = pd.DataFrame()
 
     if not in_file:
         return (
             "No files provided.",
-            gr.Dropdown(choices=[]),
-            gr.Dropdown(choices=[]),
+            gr.update(choices=[]),
+            gr.update(choices=[]),
             df,
             results_df,
+            data_file_names_end,
         )
 
     file_list = [string.name for string in in_file]
@@ -73,16 +58,20 @@ def initial_data_load(in_file):
     data_file_names = [
         string for string in file_list if "results_on_orig" not in string.lower()
     ]
+    # Get the list of file names after last slash in paths
+    data_file_names_end = [os.path.basename(string) for string in data_file_names]
+
     if data_file_names:
         df = read_file(data_file_names[0])
     else:
         error_message = "No data file found."
         return (
             error_message,
-            gr.Dropdown(choices=concat_choices),
-            gr.Dropdown(choices=concat_choices),
+            gr.update(choices=concat_choices),
+            gr.update(choices=concat_choices),
             df,
             results_df,
+            data_file_names_end,
         )
 
     results_file_names = [
@@ -98,10 +87,11 @@ def initial_data_load(in_file):
 
     return (
         output_message,
-        gr.Dropdown(choices=concat_choices),
-        gr.Dropdown(choices=concat_choices),
+        gr.update(choices=concat_choices),
+        gr.update(choices=concat_choices),
         df,
         results_df,
+        data_file_names_end,
     )
 
 

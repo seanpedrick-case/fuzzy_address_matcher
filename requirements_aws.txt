@@ -11,3 +11,4 @@ polars<=1.39.3
 numpy<=2.4.3
 requests<=2.33.1
 bleach<=6.3.0
+python-dotenv<=1.2.2

@@ -1,9 +1,10 @@
-import pandas as pd
-from typing import Type, Dict, List, Tuple
-import recordlinkage
 from datetime import datetime
+from typing import Dict, List, Tuple, Type
 
-from tools.constants import score_cut_off_nnet_street
+import pandas as pd
+import recordlinkage
+
+from tools.config import score_cut_off_nnet_street
 
 PandasDataFrame = Type[pd.DataFrame]
 PandasSeries = Type[pd.Series]

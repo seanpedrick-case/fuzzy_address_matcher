@@ -1,12 +1,15 @@
+import json
 import os
 import re
 import socket
 import urllib.parse
 from datetime import datetime
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 import bleach
+from dotenv import load_dotenv
+
 from tools.secure_path_utils import (
     secure_path_join,
 )
@@ -25,6 +28,22 @@ def _get_env_list(env_var_name: str) -> List[str]:
 
 
 # Set or retrieve configuration variables for the redaction app
+
+
+def _env_int(name: str, default: int) -> int:
+    return int(get_or_create_env_var(name, str(default)))
+
+
+def _env_float(name: str, default: float) -> float:
+    return float(get_or_create_env_var(name, str(default)))
+
+
+def _env_json_list(env_name: str, default: Optional[List]) -> List:
+    """Parse a JSON array from an environment variable, or return default if unset/empty."""
+    raw = os.environ.get(env_name)
+    if raw is None or not str(raw).strip():
+        return list(default) if default is not None else []
+    return json.loads(raw)
 
 
 def convert_string_to_boolean(value: str) -> bool:
@@ -287,8 +306,97 @@ def sanitize_markdown_text(text: str) -> str:
     return text.strip()
 
 
-S3_BUCKET_NAME = get_or_create_env_var("S3_BUCKET_NAME", "")
+###
+# LOAD CONFIG FROM ENV FILE
+###
 
+CONFIG_FOLDER = get_or_create_env_var("CONFIG_FOLDER", "config/")
+CONFIG_FOLDER = ensure_folder_within_app_directory(CONFIG_FOLDER)
+
+# If you have an aws_config env file in the config folder, you can load in app variables this way, e.g. 'config/app_config.env'
+APP_CONFIG_PATH = get_or_create_env_var(
+    "APP_CONFIG_PATH", CONFIG_FOLDER + "app_config.env"
+)  # e.g. config/app_config.env
+
+if APP_CONFIG_PATH:
+    if os.path.exists(APP_CONFIG_PATH):
+        print(f"Loading app variables from config file {APP_CONFIG_PATH}")
+        load_dotenv(APP_CONFIG_PATH)
+    else:
+        print("App config file not found at location:", APP_CONFIG_PATH)
+
+COGNITO_AUTH = convert_string_to_boolean(get_or_create_env_var("COGNITO_AUTH", "False"))
+
+
+###
+# AWS and logging
+RUN_AWS_FUNCTIONS = convert_string_to_boolean(
+    get_or_create_env_var("RUN_AWS_FUNCTIONS", "False")
+)
+
+ADDRESS_MATCHER_BUCKET = get_or_create_env_var("ADDRESS_MATCHER_BUCKET", "")
+AWS_REGION = get_or_create_env_var("AWS_REGION", "eu-west-2")
+AWS_ACCESS_KEY = get_or_create_env_var("AWS_ACCESS_KEY", "")
+AWS_SECRET_KEY = get_or_create_env_var("AWS_SECRET_KEY", "")
+AWS_CLIENT_ID = get_or_create_env_var("AWS_CLIENT_ID", "")
+AWS_USER_POOL_ID = get_or_create_env_var("AWS_USER_POOL_ID", "")
+AWS_CLIENT_SECRET = get_or_create_env_var("AWS_CLIENT_SECRET", "")
+
+LOG_FILE_NAME = get_or_create_env_var("LOG_FILE_NAME", "log.csv")
+USAGE_LOG_FILE_NAME = get_or_create_env_var("USAGE_LOG_FILE_NAME", LOG_FILE_NAME)
+FEEDBACK_LOG_FILE_NAME = get_or_create_env_var("FEEDBACK_LOG_FILE_NAME", LOG_FILE_NAME)
+
+SAVE_LOGS_TO_CSV = convert_string_to_boolean(
+    get_or_create_env_var("SAVE_LOGS_TO_CSV", "False")
+)
+SAVE_LOGS_TO_DYNAMODB = convert_string_to_boolean(
+    get_or_create_env_var("SAVE_LOGS_TO_DYNAMODB", "False")
+)
+
+ACCESS_LOG_DYNAMODB_TABLE_NAME = get_or_create_env_var(
+    "ACCESS_LOG_DYNAMODB_TABLE_NAME", "address-matcher-access-logs"
+)
+DYNAMODB_ACCESS_LOG_HEADERS = _get_env_list(
+    get_or_create_env_var("DYNAMODB_ACCESS_LOG_HEADERS", '["session_hash_textbox"]')
+)
+CSV_ACCESS_LOG_HEADERS = _get_env_list(
+    get_or_create_env_var("CSV_ACCESS_LOG_HEADERS", '["session_hash_textbox"]')
+)
+
+FEEDBACK_LOG_DYNAMODB_TABLE_NAME = get_or_create_env_var(
+    "FEEDBACK_LOG_DYNAMODB_TABLE_NAME", "address-matcher-feedback-logs"
+)
+DYNAMODB_FEEDBACK_LOG_HEADERS = _get_env_list(
+    get_or_create_env_var(
+        "DYNAMODB_FEEDBACK_LOG_HEADERS",
+        '["feedback_radio", "further_details_text", "in_file"]',
+    )
+)
+CSV_FEEDBACK_LOG_HEADERS = _get_env_list(
+    get_or_create_env_var(
+        "CSV_FEEDBACK_LOG_HEADERS",
+        '["feedback_radio", "further_details_text", "in_file"]',
+    )
+)
+
+USAGE_LOG_DYNAMODB_TABLE_NAME = get_or_create_env_var(
+    "USAGE_LOG_DYNAMODB_TABLE_NAME", "address-matcher-usage-logs"
+)
+DYNAMODB_USAGE_LOG_HEADERS = _get_env_list(
+    get_or_create_env_var(
+        "DYNAMODB_USAGE_LOG_HEADERS",
+        '["session_hash_textbox", "search_file_name", "ref_file_name", "estimated_time_taken_number"]',
+    )
+)
+CSV_USAGE_LOG_HEADERS = _get_env_list(
+    get_or_create_env_var(
+        "CSV_USAGE_LOG_HEADERS",
+        '["session_hash_textbox", "search_file_name", "ref_file_name", "estimated_time_taken_number"]',
+    )
+)
+
+###
+# App use variables
 USE_POSTCODE_BLOCKER = convert_string_to_boolean(
     get_or_create_env_var("USE_POSTCODE_BLOCKER", "True")
 )
@@ -298,6 +406,102 @@ RUN_BATCHES_IN_PARALLEL = convert_string_to_boolean(
     get_or_create_env_var("RUN_BATCHES_IN_PARALLEL", "True")
 )
 
-LOG_FILE_NAME = get_or_create_env_var("LOG_FILE_NAME", "log.csv")
-USAGE_LOG_FILE_NAME = get_or_create_env_var("USAGE_LOG_FILE_NAME", LOG_FILE_NAME)
-FEEDBACK_LOG_FILE_NAME = get_or_create_env_var("FEEDBACK_LOG_FILE_NAME", LOG_FILE_NAME)
+SHOW_FEEDBACK = convert_string_to_boolean(
+    get_or_create_env_var("SHOW_FEEDBACK", "False")
+)
+
+## Addressbase
+ADDRESSBASE_API_KEY = get_or_create_env_var("ADDRESSBASE_API_KEY", "")
+
+
+###
+# Address matcher tuning (also used by tools/constants.py — load after dotenv so
+# config/app_config.env can override). All can be set via environment variables.
+###
+
+_DEFAULT_GRADIO_OUTPUT = "output/"
+_raw_gradio_output = get_or_create_env_var(
+    "GRADIO_OUTPUT_FOLDER", _DEFAULT_GRADIO_OUTPUT
+)
+# When the output folder is the default relative "output/", neural-net model extract uses project root.
+MODEL_EXTRACT_USE_PROJECT_ROOT = _raw_gradio_output.replace("\\", "/").strip() in (
+    "output",
+    "output/",
+)
+output_folder = ensure_folder_within_app_directory(_raw_gradio_output)
+
+fuzzy_scorer_used = get_or_create_env_var("FUZZY_SCORER_USED", "token_set_ratio")
+fuzzy_match_limit = _env_int("FUZZY_MATCH_LIMIT", 85)
+fuzzy_search_addr_limit = _env_int("FUZZY_SEARCH_ADDR_LIMIT", 20)
+filter_to_lambeth_pcodes = convert_string_to_boolean(
+    get_or_create_env_var("FILTER_TO_LAMBETH_PCODES", "True")
+)
+standardise = convert_string_to_boolean(
+    get_or_create_env_var("STANDARDISE_ADDRESS", "False")
+)
+
+batch_size = _env_int("MATCHER_BATCH_SIZE", 10000)
+ref_batch_size = _env_int("MATCHER_REF_BATCH_SIZE", 20000)
+
+fuzzy_method = get_or_create_env_var("RECORDLINKAGE_FUZZY_METHOD", "jarowinkler")
+score_cut_off = _env_float("SCORE_CUT_OFF", 98.7)
+score_cut_off_nnet_street = _env_float("SCORE_CUT_OFF_NNET_STREET", 99.5)
+no_number_fuzzy_match_limit = _env_int("NO_NUMBER_FUZZY_MATCH_LIMIT", 100)
+
+_DEFAULT_REF_ADDRESS_COLS = [
+    "Organisation",
+    "SaoStartNumber",
+    "SaoStartSuffix",
+    "SaoEndNumber",
+    "SaoEndSuffix",
+    "SaoText",
+    "PaoStartNumber",
+    "PaoStartSuffix",
+    "PaoEndNumber",
+    "PaoEndSuffix",
+    "PaoText",
+    "Street",
+    "PostTown",
+    "Postcode",
+]
+_ref_cols_env = os.environ.get("MATCHER_REF_ADDRESS_COLS")
+if _ref_cols_env and str(_ref_cols_env).strip():
+    ref_address_cols = _env_json_list(
+        "MATCHER_REF_ADDRESS_COLS", _DEFAULT_REF_ADDRESS_COLS
+    )
+else:
+    ref_address_cols = list(_DEFAULT_REF_ADDRESS_COLS)
+
+matching_variables = list(ref_address_cols)
+
+_DEFAULT_TEXT_COLUMNS = ["Organisation", "PaoText", "Street", "PostTown", "Postcode"]
+_txt_env = os.environ.get("MATCHER_TEXT_COLUMNS")
+if _txt_env and str(_txt_env).strip():
+    text_columns = _env_json_list("MATCHER_TEXT_COLUMNS", _DEFAULT_TEXT_COLUMNS)
+else:
+    text_columns = list(_DEFAULT_TEXT_COLUMNS)
+
+weight_vals = [1] * len(ref_address_cols)
+weights = {ref_address_cols[i]: weight_vals[i] for i in range(len(ref_address_cols))}
+weights["Organisation"] = _env_float("MATCHER_WEIGHT_ORGANISATION", 0.1)
+weights["SaoStartNumber"] = _env_float("MATCHER_WEIGHT_SAO_START_NUMBER", 2.0)
+weights["PaoStartNumber"] = _env_float("MATCHER_WEIGHT_PAO_START_NUMBER", 2.0)
+weights["Street"] = _env_float("MATCHER_WEIGHT_STREET", 2.0)
+weights["PostTown"] = _env_float("MATCHER_WEIGHT_POST_TOWN", 0.0)
+weights["Postcode"] = _env_float("MATCHER_WEIGHT_POSTCODE", 0.5)
+
+model_type = get_or_create_env_var("MATCHER_MODEL_TYPE", "lstm")
+model_stub = get_or_create_env_var("MATCHER_MODEL_STUB", "pytorch/lstm")
+model_version = get_or_create_env_var("MATCHER_MODEL_VERSION", "")
+file_step_suffix = get_or_create_env_var("MATCHER_FILE_STEP_SUFFIX", "")
+data_sample_size = _env_int("MATCHER_DATA_SAMPLE_SIZE", 476887)
+N_EPOCHS = _env_int("MATCHER_N_EPOCHS", 10)
+max_predict_len = _env_int("MAX_PREDICT_LEN", 12000)
+
+MATCHER_CUDA_VISIBLE_DEVICES = get_or_create_env_var(
+    "MATCHER_CUDA_VISIBLE_DEVICES", "-1"
+)
+
+USE_NNET_MODEL = convert_string_to_boolean(
+    get_or_create_env_var("USE_NNET_MODEL", "True")
+)
