@@ -16,6 +16,7 @@ from tools.helper_functions import (
 from tools.aws_functions import load_data_from_aws, upload_file_to_s3
 from tools.constants import output_folder
 from tools.auth import authenticate_user
+from tools.config import USAGE_LOG_FILE_NAME, FEEDBACK_LOG_FILE_NAME, LOG_FILE_NAME
 
 import warnings
 
@@ -238,6 +239,7 @@ with block:
         ],
         outputs=[output_summary, output_file, estimated_time_taken_number],
         api_name="address",
+        show_progress_on=[output_summary],
     ).then(
         fn=reveal_feedback_buttons,
         outputs=[
@@ -256,7 +258,7 @@ with block:
     )
 
     # Log usernames and times of access to file (to know who is using the app when running on AWS)
-    access_callback = gr.CSVLogger()
+    access_callback = gr.CSVLogger(dataset_file_name=LOG_FILE_NAME)
     access_callback.setup([session_hash_textbox], access_logs_folder)
     session_hash_textbox.change(
         lambda *args: access_callback.flag(list(args)),
@@ -270,7 +272,7 @@ with block:
     )
 
     # User submitted feedback for pdf redactions
-    feedback_callback = gr.CSVLogger()
+    feedback_callback = gr.CSVLogger(dataset_file_name=FEEDBACK_LOG_FILE_NAME)
     feedback_callback.setup(
         [feedback_radio, further_details_text, in_file], feedback_logs_folder
     )
@@ -286,7 +288,7 @@ with block:
     )
 
     # Log processing time/token usage when making a query
-    usage_callback = gr.CSVLogger()
+    usage_callback = gr.CSVLogger(dataset_file_name=USAGE_LOG_FILE_NAME)
     usage_callback.setup(
         [session_hash_textbox, in_file, estimated_time_taken_number], usage_logs_folder
     )

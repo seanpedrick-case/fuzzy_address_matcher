@@ -56,18 +56,25 @@ def standardise_wrapper_func(
         "postcode_search",
     ] = ""
 
-    # Remove nulls from ref_df postcode
-    ref_df_cleaned = ref_df_cleaned[ref_df_cleaned["Postcode"].notna()]
-
     ref_df_cleaned["full_address_search"] = (
         ref_df_cleaned["fulladdress"].str.lower().str.strip()
     )
-    ref_df_cleaned["postcode_search"] = (
-        ref_df_cleaned["Postcode"]
-        .str.lower()
-        .str.strip()
-        .str.replace(r"\s+", "", regex=True)
-    )
+
+    if "Postcode" in ref_df_cleaned.columns:
+        # Remove rows where the postcode is entirely missing only when there is real
+        # postcode data to filter on; if the column is blank/synthetic (street-only mode)
+        # we keep all rows.
+        has_any_postcode = ref_df_cleaned["Postcode"].replace("", pd.NA).notna().any()
+        if has_any_postcode:
+            ref_df_cleaned = ref_df_cleaned[ref_df_cleaned["Postcode"].notna()]
+        ref_df_cleaned["postcode_search"] = (
+            ref_df_cleaned["Postcode"]
+            .str.lower()
+            .str.strip()
+            .str.replace(r"\s+", "", regex=True)
+        )
+    else:
+        ref_df_cleaned["postcode_search"] = ""
 
     # Block only on first 5 characters of postcode string - Doesn't give more matches and makes everything a bit slower
     # search_df_cleaned['postcode_search'] = search_df_cleaned['postcode_search'].str[:-1]

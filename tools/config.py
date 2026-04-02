@@ -297,3 +297,7 @@ MAX_PARALLEL_WORKERS = int(get_or_create_env_var("MAX_PARALLEL_WORKERS", "4"))
 RUN_BATCHES_IN_PARALLEL = convert_string_to_boolean(
     get_or_create_env_var("RUN_BATCHES_IN_PARALLEL", "True")
 )
+
+LOG_FILE_NAME = get_or_create_env_var("LOG_FILE_NAME", "log.csv")
+USAGE_LOG_FILE_NAME = get_or_create_env_var("USAGE_LOG_FILE_NAME", LOG_FILE_NAME)
+FEEDBACK_LOG_FILE_NAME = get_or_create_env_var("FEEDBACK_LOG_FILE_NAME", LOG_FILE_NAME)

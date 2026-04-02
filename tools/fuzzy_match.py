@@ -225,7 +225,7 @@ def string_match_by_post_code_multiple(
     unique_postcodes = pd.unique(match_address_df["postcode_search"])
 
     for postcode_match in tqdm(
-        unique_postcodes, desc="Fuzzy matching", unit="fuzzy matched postcodes"
+        unique_postcodes, desc="Fuzzy matching", unit="blocks (postcodes or streets)"
     ):
 
         postcode_match_list = [postcode_match]
@@ -852,9 +852,7 @@ def fill_reference_join_columns_for_previously_matched(
         if col not in merged.columns:
             continue
         fill_series = merged[col]
-        has_val = fill_series.notna() & (
-            fill_series.astype(str).str.strip().ne("")
-        )
+        has_val = fill_series.notna() & (fill_series.astype(str).str.strip().ne(""))
         if has_val.any():
             idx = fill_series.index[has_val]
             out.loc[idx, col] = fill_series.loc[idx]
@@ -874,6 +872,19 @@ def create_results_df(
     Following the fuzzy match, join the match results back to the original search dataframe to create a results dataframe.
     """
     search_df = search_df.copy()
+
+    # Preserve the search-side "in_existing" values even when the column name collides
+    # with `new_join_col` (and thus gets renamed and later dropped).
+    if existing_match_col:
+        if existing_match_col in search_df.columns:
+            search_df[f"__search_existing_{existing_match_col}"] = search_df[
+                existing_match_col
+            ]
+        else:
+            _alt = f"__search_side_{existing_match_col}"
+            if _alt in search_df.columns:
+                search_df[f"__search_existing_{existing_match_col}"] = search_df[_alt]
+
     for col in new_join_col:
         if col in search_df.columns:
             search_df = search_df.rename(columns={col: f"__search_side_{col}"})
@@ -983,6 +994,11 @@ def create_results_df(
             "UPRN_y",
             *[f"{col}_y" for col in new_join_col],
             *[f"__search_side_{col}" for col in new_join_col],
+            *(  # internal preservation columns
+                [f"__search_existing_{existing_match_col}"]
+                if existing_match_col
+                else []
+            ),
             "index_y",
             "full_address_search",
             "postcode_search",
@@ -999,6 +1015,14 @@ def create_results_df(
     results_for_orig_df_join.rename(
         columns={"full_address": "Search data address"}, inplace=True
     )
+
+    # Surface a dedicated existing-match column from the search data in the results output.
+    if existing_match_col:
+        _src = f"__search_existing_{existing_match_col}"
+        if _src in results_for_orig_df_join.columns:
+            results_for_orig_df_join[f"{existing_match_col} (from search data)"] = (
+                results_for_orig_df_join[_src]
+            )
 
     if ref_df_cleaned is not None and not ref_df_cleaned.empty:
         results_for_orig_df_join = fill_reference_join_columns_for_previously_matched(

@@ -36,14 +36,14 @@ from tools.preparation import (
     prepare_ref_address,
     remove_non_postal,
     check_no_number_addresses,
+    extract_postcode,
 )
 from tools.fuzzy_match import (
     string_match_by_post_code_multiple,
     _create_fuzzy_match_results_output,
     create_results_df,
-    fill_reference_join_columns_for_previously_matched,
 )
-from tools.standardise import standardise_wrapper_func
+from tools.standardise import standardise_wrapper_func, remove_postcode
 
 # Neural network functions
 ### Predict function for imported model
@@ -151,6 +151,104 @@ def filter_not_matched(
     )
 
     return search_df.iloc[np.where(~matched)[0]]
+
+
+def add_search_data_existing_col_to_results(
+    results_df: pd.DataFrame,
+    existing_match_col: Optional[str],
+) -> pd.DataFrame:
+    """
+    Expose the `in_existing` value from the search data as a clearly labelled column in the
+    results dataframe. The value lives under either the original column name or under
+    `__search_side_<name>` (when the name collides with a `new_join_col` and was renamed).
+
+    The output column is named `"<existing_match_col> (from search data)"` so it appears
+    alongside the reference-derived join column without confusion.
+    """
+    if not existing_match_col or results_df is None or results_df.empty:
+        return results_df
+
+    out = results_df.copy()
+    output_col = f"{existing_match_col} (from search data)"
+
+    # Find the source: prefer original name, then the __search_side_ alias
+    src_col = None
+    if existing_match_col in out.columns:
+        src_col = existing_match_col
+    else:
+        alt = f"__search_side_{existing_match_col}"
+        if alt in out.columns:
+            src_col = alt
+
+    if src_col is None:
+        return out
+
+    out[output_col] = out[src_col]
+    return out
+
+
+def copy_existing_match_col_to_join_cols(
+    results_df: pd.DataFrame,
+    existing_match_col: Optional[str],
+    new_join_col: List[str],
+) -> pd.DataFrame:
+    """
+    For rows flagged as 'Previously matched', the search data already holds the reference
+    identifier in the `existing_match_col` column (i.e. the value the user chose as
+    `in_existing` in the UI). Copy that value directly into the first `new_join_col` column
+    so it appears in the results CSV.
+
+    If `new_join_col[0]` and `existing_match_col` are the same name, the value may already
+    be present under `__search_side_<name>` due to earlier renaming; we handle that too.
+    """
+    if (
+        results_df is None
+        or results_df.empty
+        or not existing_match_col
+        or not new_join_col
+    ):
+        return results_df
+
+    out = results_df.copy()
+
+    previously_matched_mask = (
+        out.get("Excluded from search", pd.Series("", index=out.index))
+        .fillna("")
+        .astype(str)
+        .eq("Previously matched")
+    )
+    if not previously_matched_mask.any():
+        return out
+
+    # Locate the source series: prefer direct name, then the __search_side_ alias.
+    src_col = None
+    if existing_match_col in out.columns:
+        src_col = existing_match_col
+    else:
+        alt = f"__search_side_{existing_match_col}"
+        if alt in out.columns:
+            src_col = alt
+
+    if src_col is None:
+        return out
+
+    source_series = out.loc[previously_matched_mask, src_col]
+
+    # Copy into each new_join_col that is missing / blank for these rows.
+    for jc in new_join_col:
+        if jc not in out.columns:
+            out[jc] = pd.NA
+        current = out.loc[previously_matched_mask, jc].astype(str).str.strip()
+        is_blank = current.isin(["", "nan", "None", "<NA>"])
+        fill_idx = source_series.index[
+            is_blank.values
+            & source_series.notna().values
+            & source_series.astype(str).str.strip().ne("").values
+        ]
+        if len(fill_idx):
+            out.loc[fill_idx, jc] = source_series.loc[fill_idx].values
+
+    return out
 
 
 def _rename_search_side_join_columns_overlap(
@@ -640,6 +738,7 @@ def load_ref_data(
     in_api: List[str],
     in_api_key: str,
     query_type: str,
+    use_postcode_blocker: bool = True,
     progress=gr.Progress(track_tqdm=True),
 ):
     """
@@ -768,10 +867,42 @@ def load_ref_data(
     else:
         Matcher.standard_llpg_format = False
         Matcher.ref_address_cols = in_refcol
-        Matcher.ref_df = Matcher.ref_df.rename(
-            columns={Matcher.ref_address_cols[-1]: "Postcode"}
-        )
-        Matcher.ref_address_cols[-1] = "Postcode"
+        # When postcode blocking is requested, treat the last selected column as the
+        # postcode column (existing behaviour). When it is not requested, we only need
+        # address columns — do not force a rename to "Postcode" unless the reference data
+        # already contains one or the user has explicitly included a postcode column.
+        if use_postcode_blocker and len(Matcher.ref_address_cols) == 1:
+            # Single-column reference input in postcode mode:
+            # extract a postcode from the single address column and store it in "Postcode".
+            addr_col = Matcher.ref_address_cols[0]
+            if "Postcode" not in Matcher.ref_df.columns:
+                pc_df = extract_postcode(Matcher.ref_df, addr_col)
+                try:
+                    pc_series = pc_df.dropna(axis=1).iloc[:, 0]
+                except Exception:
+                    pc_series = pd.Series("", index=Matcher.ref_df.index)
+                Matcher.ref_df["Postcode"] = pc_series.fillna("").astype(str)
+            # Remove any embedded postcode from the address string so it doesn't pollute matching.
+            Matcher.ref_df[addr_col] = remove_postcode(Matcher.ref_df, addr_col)
+            # Downstream expects "Postcode" to exist; keep address col(s) plus "Postcode".
+            Matcher.ref_address_cols = [addr_col, "Postcode"]
+        else:
+            last_col = Matcher.ref_address_cols[-1] if Matcher.ref_address_cols else ""
+            last_col_looks_like_postcode = last_col.lower() in (
+                "postcode",
+                "post_code",
+                "pcode",
+                "postalcode",
+                "postal_code",
+            )
+            if use_postcode_blocker or last_col_looks_like_postcode:
+                Matcher.ref_df = Matcher.ref_df.rename(columns={last_col: "Postcode"})
+                Matcher.ref_address_cols[-1] = "Postcode"
+            else:
+                # Street-only mode: add a blank Postcode column so downstream code that
+                # expects the column doesn't crash, but it will be ignored during matching.
+                if "Postcode" not in Matcher.ref_df.columns:
+                    Matcher.ref_df["Postcode"] = ""
 
     # Reset index for ref_df as multiple files may have been combined with identical indices
     Matcher.ref_df = (
@@ -1178,6 +1309,7 @@ def load_matcher_data(
             in_api,
             in_api_key,
             query_type=in_api,
+            use_postcode_blocker=use_postcode_blocker,
         )
 
     ### MATCH/SEARCH FILES ###
@@ -1205,6 +1337,7 @@ def load_matcher_data(
             in_api,
             in_api_key,
             query_type=in_api,
+            use_postcode_blocker=use_postcode_blocker,
         )
 
     print("Shape of ref_df after filtering is: ", Matcher.ref_df.shape)
@@ -1657,6 +1790,63 @@ def run_matcher(
     estimate_total_processing_time = sum_numbers_before_seconds(time_out)
     print("Estimated total processing time:", str(estimate_total_processing_time))
 
+    _em_col = None
+    if OutputMatch.existing_match_cols:
+        _em_col = (
+            OutputMatch.existing_match_cols[0]
+            if isinstance(OutputMatch.existing_match_cols, list)
+            else OutputMatch.existing_match_cols
+        )
+
+    # Surface the in_existing value from the search data as a dedicated column so it
+    # is always visible in the results CSV alongside the reference-derived join column.
+    OutputMatch.results_on_orig_df = add_search_data_existing_col_to_results(
+        OutputMatch.results_on_orig_df,
+        _em_col,
+    )
+
+    # Also attach the search-side in_existing value onto the diagnostics output so it can be
+    # audited alongside match scores/methods. This is a left-join from the prepared search df.
+    if _em_col and (
+        OutputMatch.search_df_key_field in OutputMatch.search_df_cleaned.columns
+    ):
+        diag_output_col = f"{_em_col} (from search data)"
+        if diag_output_col not in OutputMatch.match_results_output.columns:
+            _src_col = None
+            if _em_col in OutputMatch.search_df_cleaned.columns:
+                _src_col = _em_col
+            else:
+                _alt = f"__search_side_{_em_col}"
+                if _alt in OutputMatch.search_df_cleaned.columns:
+                    _src_col = _alt
+
+            if _src_col:
+                _map_df = OutputMatch.search_df_cleaned[
+                    [OutputMatch.search_df_key_field, _src_col]
+                ].copy()
+                _map_df = _map_df.rename(columns={_src_col: diag_output_col})
+                _map_df[OutputMatch.search_df_key_field] = _map_df[
+                    OutputMatch.search_df_key_field
+                ].astype(str)
+                if (
+                    OutputMatch.search_df_key_field
+                    in OutputMatch.match_results_output.columns
+                ):
+                    OutputMatch.match_results_output[
+                        OutputMatch.search_df_key_field
+                    ] = OutputMatch.match_results_output[
+                        OutputMatch.search_df_key_field
+                    ].astype(
+                        str
+                    )
+                OutputMatch.match_results_output = (
+                    OutputMatch.match_results_output.merge(
+                        _map_df,
+                        on=OutputMatch.search_df_key_field,
+                        how="left",
+                    )
+                )
+
     # Ensure final output files are written once from the merged result.
     essential_results_cols = [
         OutputMatch.search_df_key_field,
@@ -1668,23 +1858,13 @@ def run_matcher(
         "Reference file",
     ]
     essential_results_cols.extend(OutputMatch.new_join_col)
+    if _em_col:
+        essential_results_cols.append(f"{_em_col} (from search data)")
     essential_results_cols = [
         col
         for col in essential_results_cols
         if col in OutputMatch.results_on_orig_df.columns
     ]
-
-    _em_col = (
-        OutputMatch.existing_match_cols[0]
-        if OutputMatch.existing_match_cols
-        else None
-    )
-    OutputMatch.results_on_orig_df = fill_reference_join_columns_for_previously_matched(
-        OutputMatch.results_on_orig_df,
-        OutputMatch.ref_df_cleaned,
-        OutputMatch.new_join_col,
-        existing_match_col=_em_col,
-    )
 
     if "fuzzy_score" in OutputMatch.match_results_output.columns:
         OutputMatch.match_results_output["fuzzy_score"] = pd.to_numeric(
@@ -2151,11 +2331,13 @@ def orchestrate_single_match_batch(
         return Matcher
 
     if not nnet:
-        _existing_col = (
-            Matcher.existing_match_cols[0]
-            if Matcher.existing_match_cols
-            else None
-        )
+        _existing_col = None
+        if Matcher.existing_match_cols:
+            _existing_col = (
+                Matcher.existing_match_cols[0]
+                if isinstance(Matcher.existing_match_cols, list)
+                else Matcher.existing_match_cols
+            )
         (
             diag_shortlist,
             diag_best_match,
@@ -2191,11 +2373,13 @@ def orchestrate_single_match_batch(
             Matcher.match_results_output = match_results_output
 
     else:
-        _existing_col = (
-            Matcher.existing_match_cols[0]
-            if Matcher.existing_match_cols
-            else None
-        )
+        _existing_col = None
+        if Matcher.existing_match_cols:
+            _existing_col = (
+                Matcher.existing_match_cols[0]
+                if isinstance(Matcher.existing_match_cols, list)
+                else Matcher.existing_match_cols
+            )
         match_results_output, results_on_orig_df, summary, predict_df_nnet = (
             full_nn_match(
                 Matcher.ref_address_cols,
@@ -2945,9 +3129,7 @@ def combine_dfs_and_remove_dups(
     elif m_series.dtype == bool or str(m_series.dtype) == "boolean":
         m_bool = m_series.fillna(False).astype(bool)
     else:
-        m_bool = m_series.astype(str).str.lower().isin(
-            ("1", "true", "t", "yes")
-        )
+        m_bool = m_series.astype(str).str.lower().isin(("1", "true", "t", "yes"))
     combined_std_not_matches["_match_sort"] = m_bool
 
     combined_std_not_matches = combined_std_not_matches.sort_values(
@@ -3089,18 +3271,16 @@ def combine_two_matches(
         by=["index", "Matched with reference address"], ascending=[True, False]
     ).drop_duplicates(subset="index")
 
-    _em_col = (
-        NewMatchClass.existing_match_cols[0]
-        if NewMatchClass.existing_match_cols
-        else None
-    )
-    NewMatchClass.results_on_orig_df = (
-        fill_reference_join_columns_for_previously_matched(
-            NewMatchClass.results_on_orig_df,
-            NewMatchClass.ref_df_cleaned,
-            NewMatchClass.new_join_col,
-            existing_match_col=_em_col,
+    _em_col = None
+    if NewMatchClass.existing_match_cols:
+        _em_col = (
+            NewMatchClass.existing_match_cols[0]
+            if isinstance(NewMatchClass.existing_match_cols, list)
+            else NewMatchClass.existing_match_cols
         )
+    NewMatchClass.results_on_orig_df = add_search_data_existing_col_to_results(
+        NewMatchClass.results_on_orig_df,
+        _em_col,
     )
 
     NewMatchClass.output_summary = create_match_summary(
@@ -3124,6 +3304,59 @@ def combine_two_matches(
         output_folder + "results_" + today_rev + ".csv"
     )  # + NewMatchClass.file_name + "_"
 
+    _em_col_btch = None
+    if NewMatchClass.existing_match_cols:
+        _em_col_btch = (
+            NewMatchClass.existing_match_cols[0]
+            if isinstance(NewMatchClass.existing_match_cols, list)
+            else NewMatchClass.existing_match_cols
+        )
+    NewMatchClass.results_on_orig_df = add_search_data_existing_col_to_results(
+        NewMatchClass.results_on_orig_df,
+        _em_col_btch,
+    )
+
+    # Attach search-side in_existing value onto diagnostics output as well.
+    if _em_col_btch and (
+        NewMatchClass.search_df_key_field in NewMatchClass.search_df_cleaned.columns
+    ):
+        diag_output_col = f"{_em_col_btch} (from search data)"
+        if diag_output_col not in NewMatchClass.match_results_output.columns:
+            _src_col = None
+            if _em_col_btch in NewMatchClass.search_df_cleaned.columns:
+                _src_col = _em_col_btch
+            else:
+                _alt = f"__search_side_{_em_col_btch}"
+                if _alt in NewMatchClass.search_df_cleaned.columns:
+                    _src_col = _alt
+
+            if _src_col:
+                _map_df = NewMatchClass.search_df_cleaned[
+                    [NewMatchClass.search_df_key_field, _src_col]
+                ].copy()
+                _map_df = _map_df.rename(columns={_src_col: diag_output_col})
+                _map_df[NewMatchClass.search_df_key_field] = _map_df[
+                    NewMatchClass.search_df_key_field
+                ].astype(str)
+                if (
+                    NewMatchClass.search_df_key_field
+                    in NewMatchClass.match_results_output.columns
+                ):
+                    NewMatchClass.match_results_output[
+                        NewMatchClass.search_df_key_field
+                    ] = NewMatchClass.match_results_output[
+                        NewMatchClass.search_df_key_field
+                    ].astype(
+                        str
+                    )
+                NewMatchClass.match_results_output = (
+                    NewMatchClass.match_results_output.merge(
+                        _map_df,
+                        on=NewMatchClass.search_df_key_field,
+                        how="left",
+                    )
+                )
+
     # Only keep essential columns
     essential_results_cols = [
         NewMatchClass.search_df_key_field,
@@ -3135,6 +3368,13 @@ def combine_two_matches(
         "Reference file",
     ]
     essential_results_cols.extend(NewMatchClass.new_join_col)
+    if _em_col_btch:
+        essential_results_cols.append(f"{_em_col_btch} (from search data)")
+    essential_results_cols = [
+        col
+        for col in essential_results_cols
+        if col in NewMatchClass.results_on_orig_df.columns
+    ]
 
     if "fuzzy_score" in NewMatchClass.match_results_output.columns:
         NewMatchClass.match_results_output["fuzzy_score"] = pd.to_numeric(
@@ -3149,7 +3389,12 @@ def combine_two_matches(
         NewMatchClass.match_results_output.to_csv(
             NewMatchClass.match_outputs_name, index=None
         )
-        NewMatchClass.results_on_orig_df[essential_results_cols].to_csv(
+        out_cols = [
+            c
+            for c in essential_results_cols
+            if c in NewMatchClass.results_on_orig_df.columns
+        ]
+        NewMatchClass.results_on_orig_df[out_cols].to_csv(
             NewMatchClass.results_orig_df_name, index=None
         )
 
