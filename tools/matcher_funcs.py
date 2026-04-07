@@ -328,6 +328,8 @@ def query_addressbase_api(
 
     final_api_output_file_name = ""
 
+    print("in_api_key: ", in_api_key)
+
     if in_api_key == "":
         print("No API key provided, please provide one to continue")
         return Matcher, final_api_output_file_name
@@ -594,7 +596,7 @@ def query_addressbase_api(
                 )
 
                 toc = time.perf_counter()
-                print("API call time in seconds: ", toc - tic)
+                print("API call time (seconds): ", round(toc - tic, 1))
             else:
                 print("No valid postcodes found.")
 
