@@ -17,9 +17,10 @@ from tools.addressbase_api_funcs import places_api_query
 from tools.config import (
     MAX_PARALLEL_WORKERS,
     RUN_BATCHES_IN_PARALLEL,
+    SAVE_INTERIM_FILES,
+    USE_EXISTING_STANDARDISED_FILES,
     USE_POSTCODE_BLOCKER,
     batch_size,
-    filter_to_lambeth_pcodes,
     max_predict_len,
     output_folder,
     ref_batch_size,
@@ -55,7 +56,10 @@ from tools.preparation import (
     remove_non_postal,
 )
 from tools.recordlinkage_funcs import score_based_match
-from tools.standardise import remove_postcode, standardise_wrapper_func
+from tools.standardise import (
+    remove_postcode,
+    standardise_address,
+)
 
 # (max_predict_len, MatcherClass imported above)
 
@@ -105,15 +109,101 @@ def read_file(filename: str) -> PandasDataFrame:
 
 
 def get_file_name(in_name: str) -> str:
-    """Get the name of a file from a string, handling both Windows and Unix paths."""
+    """Get basename from a path-like string, handling Windows/Unix separators."""
+    if not in_name:
+        return None
+    in_name = str(in_name).strip()
+    if not in_name:
+        return None
+    # Normalise separators first so basenames are extracted consistently even
+    # when incoming paths use a separator that differs from the host OS.
+    normalized = in_name.replace("\\", "/").rstrip("/")
+    base = os.path.basename(normalized)
+    return base or None
 
-    match = re.search(rf"{re.escape(os.sep)}(?!.*{re.escape(os.sep)})(.*)", in_name)
-    if match:
-        matched_result = match.group(1)
+
+def _safe_file_stem(name: str, default: str) -> str:
+    raw = (name or "").strip()
+    if not raw:
+        raw = default
+    stem = os.path.splitext(raw)[0]
+    for ch in (":", "*", "?", '"', "<", ">", "|", "\\", "/"):
+        stem = stem.replace(ch, "_")
+    return stem
+
+
+def _stand_cache_path(output_folder: str, input_name: str, stand_kind: str) -> str:
+    """
+    input_name: original input file name (or a descriptive label like 'API').
+    stand_kind: 'stand_min' or 'stand_full'.
+    Produces <output_folder>/<input_stem>_<stand_kind>.parquet
+    """
+    stem = _safe_file_stem(input_name, default="data")
+    out_dir = output_folder or ""
+    if out_dir and not out_dir.endswith((os.sep, "/")):
+        out_dir = out_dir + os.sep
+    return os.path.join(out_dir, f"{stem}_{stand_kind}.parquet")
+
+
+def _standardise_search_df(
+    search_df_cleaned: PandasDataFrame, *, standardise: bool
+) -> PandasDataFrame:
+    # Mirror `standardise_wrapper_func` but only for the search side.
+    full_address_col = search_df_cleaned["full_address"]
+    if isinstance(full_address_col, pd.DataFrame):
+        full_address_col = full_address_col.iloc[:, 0]
+
+    postcode_col = search_df_cleaned["postcode"]
+    if isinstance(postcode_col, pd.DataFrame):
+        postcode_col = postcode_col.iloc[:, 0]
+
+    df = search_df_cleaned.copy()
+    df["full_address_search"] = full_address_col.astype(str).str.lower().str.strip()
+    df["postcode_search"] = (
+        postcode_col.astype(str)
+        .str.lower()
+        .str.strip()
+        .str.replace(r"\s+", "", regex=True)
+    )
+
+    df.loc[
+        df["Excluded from search"] == "Excluded - non-postal address",
+        "postcode_search",
+    ] = ""
+
+    return standardise_address(
+        df,
+        "full_address_search",
+        "search_address_stand",
+        standardise=standardise,
+        out_london=True,
+    )
+
+
+def _standardise_ref_df(
+    ref_df_cleaned: PandasDataFrame, *, standardise: bool
+) -> PandasDataFrame:
+    # Mirror `standardise_wrapper_func` but only for the reference side (fuzzy task).
+    df = ref_df_cleaned.copy()
+    df["full_address_search"] = df["fulladdress"].str.lower().str.strip()
+
+    if "Postcode" in df.columns:
+        has_any_postcode = df["Postcode"].replace("", pd.NA).notna().any()
+        if has_any_postcode:
+            df = df[df["Postcode"].notna()]
+        df["postcode_search"] = (
+            df["Postcode"].str.lower().str.strip().str.replace(r"\s+", "", regex=True)
+        )
     else:
-        matched_result = None
+        df["postcode_search"] = ""
 
-    return matched_result
+    return standardise_address(
+        df,
+        "full_address_search",
+        "ref_address_stand",
+        standardise=standardise,
+        out_london=True,
+    )
 
 
 def filter_not_matched(
@@ -411,11 +501,11 @@ def query_addressbase_api(
 
             if (i + 1) % 500 == 0:
                 print("Saving api call checkpoint for query:", str(i + 1))
-
-                pd.concat(loop_list).to_parquet(
-                    os.path.join(base_output_folder, api_ref_save_loc + ".parquet"),
-                    index=False,
-                )
+                if SAVE_INTERIM_FILES:
+                    pd.concat(loop_list).to_parquet(
+                        os.path.join(base_output_folder, api_ref_save_loc + ".parquet"),
+                        index=False,
+                    )
 
             return loop_list
 
@@ -723,11 +813,13 @@ def query_addressbase_api(
                 base_output_folder, api_ref_save_loc[:-5] + ".csv"
             )
             print("Saving reference file to: " + api_ref_save_loc[:-5] + ".parquet")
-            Matcher.ref_df.to_parquet(
-                os.path.join(base_output_folder, api_ref_save_loc + ".parquet"),
-                index=False,
-            )  # Save checkpoint as well
-            Matcher.ref_df.to_parquet(final_api_output_file_name_pq, index=False)
+            if SAVE_INTERIM_FILES:
+                # Optional checkpoint/alternate format outputs for debugging/restarts.
+                Matcher.ref_df.to_parquet(
+                    os.path.join(base_output_folder, api_ref_save_loc + ".parquet"),
+                    index=False,
+                )
+                Matcher.ref_df.to_parquet(final_api_output_file_name_pq, index=False)
             Matcher.ref_df.to_csv(final_api_output_file_name)
 
         if Matcher.ref_df.empty:
@@ -754,10 +846,18 @@ def load_ref_data(
     """
     final_api_output_file_name = ""
 
+    # Prefer explicit uploaded/reference file name when available, even when
+    # dataframe state is already populated from a prior step.
+    if in_ref:
+        inferred_ref_name = get_file_name(in_ref[0].name)
+        if inferred_ref_name:
+            Matcher.ref_name = inferred_ref_name
+
     # Check if reference data loaded, bring in if already there
     if not ref_data_state.empty:
         Matcher.ref_df = ref_data_state
-        Matcher.ref_name = get_file_name(in_ref[0].name)
+        if in_ref:
+            Matcher.ref_name = get_file_name(in_ref[0].name)
 
         if not Matcher.ref_name:
             Matcher.ref_name = ""
@@ -947,6 +1047,18 @@ def load_match_data_and_filter(
     # Set search address cols as entered column names
     # print("In colnames in check match data: ", in_colnames)
     Matcher.search_address_cols = in_colnames
+
+    # Prefer explicit uploaded search filename when available, even when
+    # dataframe state is already populated from a prior step.
+    if in_file:
+        file_list = [string.name for string in in_file]
+        data_file_names = [
+            string for string in file_list if "results_" not in string.lower()
+        ]
+        if data_file_names:
+            inferred_file_name = get_file_name(data_file_names[0])
+            if inferred_file_name:
+                Matcher.file_name = inferred_file_name
 
     # Check if data loaded already and bring it in
     if not data_state.empty:
@@ -1391,8 +1503,9 @@ def load_matcher_data(
             Matcher.match_results_output["wratio_score"], errors="coerce"
         ).round(2)
 
-    Matcher.match_results_output.to_csv(Matcher.match_outputs_name, index=None)
-    Matcher.results_on_orig_df.to_csv(Matcher.results_orig_df_name, index=None)
+    if SAVE_INTERIM_FILES:
+        Matcher.match_results_output.to_csv(Matcher.match_outputs_name, index=None)
+        Matcher.results_on_orig_df.to_csv(Matcher.results_orig_df_name, index=None)
 
     return Matcher, final_api_output_file_name
 
@@ -1643,10 +1756,6 @@ def fuzzy_address_match(
     # Run initial address preparation and standardisation processes
     # Prepare address format
 
-    # Polars implementation not yet finalised
-    # InitMatch.search_df = pl.from_pandas(InitMatch.search_df)
-    # InitMatch.ref_df = pl.from_pandas(InitMatch.ref_df)
-
     # Prepare all search addresses
     if isinstance(InitMatch.search_df, str):
         (
@@ -1677,10 +1786,6 @@ def fuzzy_address_match(
         InitMatch.ref_df, InitMatch.ref_address_cols, InitMatch.new_join_col
     )
 
-    # Polars implementation - not finalised
-    # InitMatch.search_df_cleaned = InitMatch.search_df_cleaned.to_pandas()
-    # InitMatch.ref_df_cleaned = InitMatch.ref_df_cleaned.to_pandas()
-
     # Standardise addresses
     # Standardise - minimal
 
@@ -1688,35 +1793,76 @@ def fuzzy_address_match(
 
     progress(0.1, desc="Performing minimal standardisation")
 
-    InitMatch.search_df_after_stand, InitMatch.ref_df_after_stand = (
-        standardise_wrapper_func(
-            InitMatch.search_df_cleaned.copy(),
-            InitMatch.ref_df_cleaned.copy(),
-            standardise=False,
-            filter_to_lambeth_pcodes=filter_to_lambeth_pcodes,
-            match_task="fuzzy",
+    _stand_out = getattr(InitMatch, "output_folder", None) or output_folder
+    _path_min_s = _stand_cache_path(_stand_out, InitMatch.file_name, "stand_min")
+    _path_min_r = _stand_cache_path(_stand_out, InitMatch.ref_name, "stand_min")
+
+    _loaded_min_s = False
+    if USE_EXISTING_STANDARDISED_FILES and os.path.isfile(_path_min_s):
+        InitMatch.search_df_after_stand = pd.read_parquet(_path_min_s)
+        _loaded_min_s = True
+        print(f"Loaded minimal search standardisation from cache:\n  {_path_min_s}")
+    else:
+        InitMatch.search_df_after_stand = _standardise_search_df(
+            InitMatch.search_df_cleaned, standardise=False
         )
-    )  # InitMatch.search_df_after_stand_series, InitMatch.ref_df_after_stand_series
+        InitMatch.search_df_after_stand.to_parquet(_path_min_s, index=False)
+
+    _loaded_min_r = False
+    if USE_EXISTING_STANDARDISED_FILES and os.path.isfile(_path_min_r):
+        InitMatch.ref_df_after_stand = pd.read_parquet(_path_min_r)
+        _loaded_min_r = True
+        print(f"Loaded minimal reference standardisation from cache:\n  {_path_min_r}")
+    else:
+        InitMatch.ref_df_after_stand = _standardise_ref_df(
+            InitMatch.ref_df_cleaned, standardise=False
+        )
+        InitMatch.ref_df_after_stand.to_parquet(_path_min_r, index=False)
 
     toc = time.perf_counter()
-    print(f"Performed the minimal standardisation step in {toc - tic:0.1f} seconds")
+    if _loaded_min_s and _loaded_min_r:
+        print(f"Minimal standardisation (cache) in {toc - tic:0.1f} seconds")
+    elif _loaded_min_s or _loaded_min_r:
+        print(f"Minimal standardisation (partial cache) in {toc - tic:0.1f} seconds")
+    else:
+        print(f"Performed the minimal standardisation step in {toc - tic:0.1f} seconds")
 
     progress(0.1, desc="Performing full standardisation")
 
     # Standardise - full
     tic = time.perf_counter()
-    InitMatch.search_df_after_full_stand, InitMatch.ref_df_after_full_stand = (
-        standardise_wrapper_func(
-            InitMatch.search_df_cleaned.copy(),
-            InitMatch.ref_df_cleaned.copy(),
-            standardise=True,
-            filter_to_lambeth_pcodes=filter_to_lambeth_pcodes,
-            match_task="fuzzy",
+    _path_full_s = _stand_cache_path(_stand_out, InitMatch.file_name, "stand_full")
+    _path_full_r = _stand_cache_path(_stand_out, InitMatch.ref_name, "stand_full")
+
+    _loaded_full_s = False
+    if USE_EXISTING_STANDARDISED_FILES and os.path.isfile(_path_full_s):
+        InitMatch.search_df_after_full_stand = pd.read_parquet(_path_full_s)
+        _loaded_full_s = True
+        print(f"Loaded full search standardisation from cache:\n  {_path_full_s}")
+    else:
+        InitMatch.search_df_after_full_stand = _standardise_search_df(
+            InitMatch.search_df_cleaned, standardise=True
         )
-    )  # , InitMatch.search_df_after_stand_series_full_stand, InitMatch.ref_df_after_stand_series_full_stand
+        InitMatch.search_df_after_full_stand.to_parquet(_path_full_s, index=False)
+
+    _loaded_full_r = False
+    if USE_EXISTING_STANDARDISED_FILES and os.path.isfile(_path_full_r):
+        InitMatch.ref_df_after_full_stand = pd.read_parquet(_path_full_r)
+        _loaded_full_r = True
+        print(f"Loaded full reference standardisation from cache:\n  {_path_full_r}")
+    else:
+        InitMatch.ref_df_after_full_stand = _standardise_ref_df(
+            InitMatch.ref_df_cleaned, standardise=True
+        )
+        InitMatch.ref_df_after_full_stand.to_parquet(_path_full_r, index=False)
 
     toc = time.perf_counter()
-    print(f"Performed the full standardisation step in {toc - tic:0.1f} seconds")
+    if _loaded_full_s and _loaded_full_r:
+        print(f"Full standardisation (cache) in {toc - tic:0.1f} seconds")
+    elif _loaded_full_s or _loaded_full_r:
+        print(f"Full standardisation (partial cache) in {toc - tic:0.1f} seconds")
+    else:
+        print(f"Performed the full standardisation step in {toc - tic:0.1f} seconds")
 
     use_postcode_blocker_effective = bool(use_postcode_blocker)
     if use_postcode_blocker_effective:

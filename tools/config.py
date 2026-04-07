@@ -478,20 +478,47 @@ OUTPUT_FOLDER = output_folder
 
 fuzzy_scorer_used = get_or_create_env_var("FUZZY_SCORER_USED", "token_set_ratio")
 fuzzy_match_limit = _env_int("FUZZY_MATCH_LIMIT", 85)
-fuzzy_search_addr_limit = _env_int("FUZZY_SEARCH_ADDR_LIMIT", 20)
+fuzzy_search_addr_limit = _env_int(
+    "FUZZY_SEARCH_ADDR_LIMIT", 20
+)  # Max number of addresses to shortlist for each search address match
 filter_to_lambeth_pcodes = convert_string_to_boolean(
-    get_or_create_env_var("FILTER_TO_LAMBETH_PCODES", "True")
+    get_or_create_env_var("FILTER_TO_LAMBETH_PCODES", "False")
 )
 standardise = convert_string_to_boolean(
-    get_or_create_env_var("STANDARDISE_ADDRESS", "False")
+    get_or_create_env_var("STANDARDISE_ADDRESS", "True")
 )
+STANDARDISE_BACKEND = (
+    get_or_create_env_var("STANDARDISE_BACKEND", "polars").strip().lower()
+)  # Which backend to use for standardisation
+if STANDARDISE_BACKEND not in {"pandas", "polars"}:
+    STANDARDISE_BACKEND = "pandas"
+PREPARATION_BACKEND = (
+    get_or_create_env_var("PREPARATION_BACKEND", "polarss").strip().lower()
+)  # Which backend to use for preparation
+if PREPARATION_BACKEND not in {"pandas", "polars"}:
+    PREPARATION_BACKEND = "pandas"
 
-batch_size = _env_int("MATCHER_BATCH_SIZE", 10000)
-ref_batch_size = _env_int("MATCHER_REF_BATCH_SIZE", 20000)
+USE_EXISTING_STANDARDISED_FILES = convert_string_to_boolean(
+    get_or_create_env_var("USE_EXISTING_STANDARDISED_FILES", "True")
+)  # If existing standardised files exist in the output folder, the standardisation process is skipped
+SAVE_INTERIM_FILES = convert_string_to_boolean(
+    get_or_create_env_var("SAVE_INTERIM_FILES", "False")
+)  # If True, save extra interim/checkpoint files during matching
+
+batch_size = _env_int(
+    "MATCHER_BATCH_SIZE", 10000
+)  # Maximum size per batch for the search address rows
+ref_batch_size = _env_int(
+    "MATCHER_REF_BATCH_SIZE", 20000
+)  # Maximum size per batch for the reference address rows
 
 fuzzy_method = get_or_create_env_var("RECORDLINKAGE_FUZZY_METHOD", "jarowinkler")
-score_cut_off = _env_float("SCORE_CUT_OFF", 98.7)
-score_cut_off_nnet_street = _env_float("SCORE_CUT_OFF_NNET_STREET", 99.5)
+score_cut_off = _env_float(
+    "SCORE_CUT_OFF", 98.7
+)  # Score cut off for matching when using the neural net method and postcode based blocking
+score_cut_off_nnet_street = _env_float(
+    "SCORE_CUT_OFF_NNET_STREET", 99.5
+)  # Score cut off for matching when using the neural net method for street names
 no_number_fuzzy_match_limit = _env_int("NO_NUMBER_FUZZY_MATCH_LIMIT", 100)
 
 _DEFAULT_REF_ADDRESS_COLS = [
@@ -549,5 +576,5 @@ MATCHER_CUDA_VISIBLE_DEVICES = get_or_create_env_var(
 )
 
 USE_NNET_MODEL = convert_string_to_boolean(
-    get_or_create_env_var("USE_NNET_MODEL", "True")
+    get_or_create_env_var("USE_NNET_MODEL", "False")
 )

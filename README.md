@@ -23,12 +23,6 @@ pip install -e .
 Install with optional extras:
 
 ```bash
-# Neural-net matching (PyTorch)
-pip install -e ".[nnet]"
-
-# Development tools
-pip install -e ".[dev]"
-
 # Test dependencies
 pip install -e ".[test]"
 ```
@@ -37,6 +31,41 @@ Run the app:
 
 ```bash
 python app.py
+```
+
+### Standardisation backend
+
+Address standardisation keeps pandas-compatible outputs by default, but supports an
+opt-in Polars execution backend for performance benchmarking:
+
+```bash
+set STANDARDISE_BACKEND=polars
+```
+
+Valid values are `pandas` (default) and `polars`.
+
+### Benchmark standardisation speed
+
+Run a repeatable benchmark of the standardisation stage:
+
+```bash
+python scripts/benchmark_standardise.py --backend both --multiplier 1000 --repeats 3
+```
+
+This compares pandas and Polars backends while preserving the same output schema.
+
+### Preparation backend (matcher setup stage)
+
+The search/reference preparation stage can also be switched independently:
+
+```bash
+set PREPARATION_BACKEND=polars
+```
+
+Benchmark preparation-only and end-to-end matcher runtime:
+
+```bash
+python scripts/benchmark_preparation.py --mode both --multiplier 200 --repeats 2
 ```
 # Important note
 I suggest that this app should be used in conjunction with the excellent [uk_address_matcher package](https://github.com/moj-analytical-services/uk_address_matcher). I am finding that this package is great for ~95% of matches with uk addresses. However, the repo here (fuzzy_address_matcher) uses slightly different methods for matching (address standardisation, fuzzy matching), and so, as of April 2026, it can still pick up some new matches.

@@ -25,7 +25,7 @@ keywords = [
     "uk-addresses",
 ]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "Topic :: Scientific/Engineering :: Information Analysis",
     "Programming Language :: Python :: 3",
@@ -55,7 +55,6 @@ dependencies = [
 
 [project.optional-dependencies]
 nnet = ["torch<=2.9.1"]
-dev = ["pytest<=9.0.2"]
 test = ["pytest<=9.0.2", "pytest-cov"]
 
 [tool.setuptools.packages.find]
