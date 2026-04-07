@@ -1,9 +1,10 @@
-# import polars as pl
+import os
 import re
 from datetime import datetime
 from typing import Dict, List, Tuple, Type
 
 import pandas as pd
+import polars as pl
 from gradio import Progress
 from tqdm import tqdm
 
@@ -18,6 +19,18 @@ array = List[str]
 
 today = datetime.now().strftime("%d%m%Y")
 today_rev = datetime.now().strftime("%Y%m%d")
+VALID_PREPARATION_BACKENDS = {"pandas", "polars"}
+
+
+def _get_preparation_backend() -> str:
+    backend = os.environ.get("PREPARATION_BACKEND", "pandas").strip().lower()
+    if backend not in VALID_PREPARATION_BACKENDS:
+        return "pandas"
+    return backend
+
+
+def _use_polars_backend() -> bool:
+    return _get_preparation_backend() == "polars"
 
 
 def prepare_search_address_string(
@@ -130,6 +143,9 @@ def prepare_search_address(
 
 # Helper functions
 def _clean_columns(df: PandasDataFrame, cols: List[str]):
+    if _use_polars_backend():
+        return _clean_columns_polars(df, cols)
+
     # Cleaning logic
     def clean_col(col):
         return (
@@ -152,7 +168,48 @@ def _clean_columns(df: PandasDataFrame, cols: List[str]):
     return df
 
 
+def _clean_columns_polars(df: PandasDataFrame, cols: List[str]):
+    duplicate_two_words_pattern = re.compile(r"(\b\w+\b\s+\b\w+\b)\s+\1$")
+    pldf = pl.from_pandas(df, include_index=False)
+    exprs = []
+    for col in cols:
+        exprs.append(
+            pl.col(col)
+            .cast(pl.Utf8)
+            .fill_null("")
+            .str.replace_all("nan", "")
+            .str.replace_all(r"(?i)\bnone\b", "")
+            .str.replace_all(r"\s{2,}", " ")
+            .str.replace_all(",", " ")
+            .str.replace_all(r"[\r\n]+", " ")
+            .str.strip_chars()
+            .map_elements(
+                lambda value: duplicate_two_words_pattern.sub(r"\1", value),
+                return_dtype=pl.Utf8,
+            )
+            .alias(col)
+        )
+    updated = pldf.with_columns(exprs)
+    for col in cols:
+        df[col] = updated[col].to_numpy()
+    return df
+
+
 def _join_address(df: PandasDataFrame, cols: List[str]):
+    if _use_polars_backend():
+        pldf = pl.from_pandas(df[cols], include_index=False)
+        cast_exprs = [
+            pl.col(col).cast(pl.Utf8).fill_null("nan").alias(col) for col in cols
+        ]
+        updated = pldf.with_columns(cast_exprs).with_columns(
+            pl.concat_str([pl.col(col) for col in cols], separator=" ")
+            .str.replace_all(r"\s{2,}", " ")
+            .str.strip_chars()
+            .alias("full_address")
+        )
+        df["full_address"] = updated["full_address"].to_numpy()
+        return df
+
     # Joining logic
     full_address = df[cols].apply(lambda row: " ".join(row.values.astype(str)), axis=1)
     df["full_address"] = full_address.str.replace(
@@ -307,24 +364,10 @@ def prepare_ref_address(
     ref_df_cleaned = ref_df_cleaned[ref_address_cols_uprn_w_ref_present]
 
     ref_df_cleaned = ref_df_cleaned.fillna("").infer_objects(copy=False)
-
-    all_columns = list(ref_df_cleaned)  # Creates list of all column headers
+    all_columns = list(ref_df_cleaned)
     ref_df_cleaned[all_columns] = (
-        ref_df_cleaned[all_columns]
-        .astype(str)
-        .fillna("")
-        .infer_objects(copy=False)
-        .replace("nan", "")
+        ref_df_cleaned[all_columns].astype(str).replace("nan", "")
     )
-
-    ref_df_cleaned = ref_df_cleaned.replace(r"\.0", "", regex=True)
-
-    # Create full address
-
-    all_columns = list(ref_df_cleaned)  # Creates list of all column headers
-    ref_df_cleaned[all_columns] = ref_df_cleaned[all_columns].astype(str)
-
-    ref_df_cleaned = ref_df_cleaned.replace("nan", "")
     ref_df_cleaned = ref_df_cleaned.replace(r"\.0", "", regex=True)
 
     if standard_cols:
@@ -349,10 +392,8 @@ def prepare_ref_address(
         ref_address_cols_present = [
             col for col in ref_address_cols if col in ref_df_cleaned.columns
         ]
-        full_address = ref_df_cleaned[ref_address_cols_present].apply(
-            lambda row: " ".join(row.values.astype(str)), axis=1
-        )
-        ref_df_cleaned["fulladdress"] = full_address
+        ref_df_cleaned = _join_address(ref_df_cleaned, ref_address_cols_present)
+        ref_df_cleaned["fulladdress"] = ref_df_cleaned["full_address"]
 
     ref_df_cleaned = _clean_columns(ref_df_cleaned, ["fulladdress"])
 
@@ -392,17 +433,23 @@ def check_no_number_addresses(
     """
     Highlight addresses from a pandas df where there are no numbers in the address.
     """
-    df["in_address_series_temp"] = df[in_address_series].str.lower()
-
-    no_numbers_series = df["in_address_series_temp"].str.contains(
-        r"^(?!.*\d+).*$", regex=True
-    )
+    if _use_polars_backend():
+        pldf = pl.DataFrame(
+            {"text": df[in_address_series].astype(str).to_numpy()}
+        ).with_columns(pl.col("text").cast(pl.Utf8).fill_null("").alias("text"))
+        no_numbers_series = (~pldf["text"].str.contains(r"\d+")).to_numpy()
+    else:
+        df["in_address_series_temp"] = df[in_address_series].str.lower()
+        no_numbers_series = df["in_address_series_temp"].str.contains(
+            r"^(?!.*\d+).*$", regex=True
+        )
 
     df.loc[no_numbers_series, "Excluded from search"] = (
         "Excluded - no numbers in address"
     )
 
-    df = df.drop("in_address_series_temp", axis=1)
+    if "in_address_series_temp" in df.columns:
+        df = df.drop("in_address_series_temp", axis=1)
 
     # print(df[["full_address", "Excluded from search"]])
 
@@ -559,34 +606,48 @@ def remove_non_postal(df: PandasDataFrame, in_address_series: str):
     Highlight non-postal addresses from a polars df where a string series that contain specific substrings
     indicating non-postal addresses like 'garage', 'parking', 'shed', etc.
     """
-    df["in_address_series_temp"] = df[in_address_series].str.lower()
+    if _use_polars_backend():
+        pldf = pl.DataFrame(
+            {"text": df[in_address_series].astype(str).to_numpy()}
+        ).with_columns(pl.col("text").cast(pl.Utf8).fill_null("").alias("text"))
+        non_postal_series = (
+            pldf["text"]
+            .str.to_lowercase()
+            .str.contains(
+                r"\bgarage\b|\bgarages\b|\bparking\b|\bshed\b|\bsheds\b|\bbike\b|\bbikes\b|\bbicycle store\b"
+            )
+        )
+        non_postal_series = non_postal_series.to_numpy()
+    else:
+        df["in_address_series_temp"] = df[in_address_series].str.lower()
 
-    garage_address_series = df["in_address_series_temp"].str.contains(
-        "(?i)(?:\\bgarage\\b|\\bgarages\\b)", regex=True
-    )
-    parking_address_series = df["in_address_series_temp"].str.contains(
-        "(?i)(?:\\bparking\\b)", regex=True
-    )
-    shed_address_series = df["in_address_series_temp"].str.contains(
-        "(?i)(?:\\bshed\\b|\\bsheds\\b)", regex=True
-    )
-    bike_address_series = df["in_address_series_temp"].str.contains(
-        "(?i)(?:\\bbike\\b|\\bbikes\\b)", regex=True
-    )
-    bicycle_store_address_series = df["in_address_series_temp"].str.contains(
-        "(?i)(?:\\bbicycle store\\b|\\bbicycle store\\b)", regex=True
-    )
+        garage_address_series = df["in_address_series_temp"].str.contains(
+            "(?i)(?:\\bgarage\\b|\\bgarages\\b)", regex=True
+        )
+        parking_address_series = df["in_address_series_temp"].str.contains(
+            "(?i)(?:\\bparking\\b)", regex=True
+        )
+        shed_address_series = df["in_address_series_temp"].str.contains(
+            "(?i)(?:\\bshed\\b|\\bsheds\\b)", regex=True
+        )
+        bike_address_series = df["in_address_series_temp"].str.contains(
+            "(?i)(?:\\bbike\\b|\\bbikes\\b)", regex=True
+        )
+        bicycle_store_address_series = df["in_address_series_temp"].str.contains(
+            "(?i)(?:\\bbicycle store\\b|\\bbicycle store\\b)", regex=True
+        )
 
-    non_postal_series = (
-        garage_address_series
-        | parking_address_series
-        | shed_address_series
-        | bike_address_series
-        | bicycle_store_address_series
-    )
+        non_postal_series = (
+            garage_address_series
+            | parking_address_series
+            | shed_address_series
+            | bike_address_series
+            | bicycle_store_address_series
+        )
 
     df.loc[non_postal_series, "Excluded from search"] = "Excluded - non-postal address"
 
-    df = df.drop("in_address_series_temp", axis=1)
+    if "in_address_series_temp" in df.columns:
+        df = df.drop("in_address_series_temp", axis=1)
 
     return df

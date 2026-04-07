@@ -53,7 +53,7 @@ def initial_data_load(in_file):
     new_choices = []
     concat_choices = []
     output_message = ""
-    data_file_names_end = []
+    data_file_names_end = ""
     results_df = pd.DataFrame()
     df = pd.DataFrame()
 
@@ -73,7 +73,7 @@ def initial_data_load(in_file):
         string for string in file_list if "results_on_orig" not in string.lower()
     ]
     # Get the list of file names after last slash in paths
-    data_file_names_end = [os.path.basename(string) for string in data_file_names]
+    data_file_names_end = [os.path.basename(string) for string in data_file_names][0]
 
     if data_file_names:
         df = read_file(data_file_names[0])

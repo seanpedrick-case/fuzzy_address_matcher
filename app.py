@@ -83,12 +83,12 @@ def load_address_example(_example_key: str):
             gr.update(choices=[], value=[]),
             pd.DataFrame(),
             pd.DataFrame(),
-            [],
+            "",
             gr.update(choices=[], value=[]),
             gr.update(choices=[], value=[]),
             pd.DataFrame(),
             pd.DataFrame(),
-            [],
+            "",
         )
 
     search_files = [_ExampleFile(str(EXAMPLE_SEARCH_FILE))]

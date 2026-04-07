@@ -1,3 +1,4 @@
+import os
 import re
 import warnings
 from datetime import datetime
@@ -5,6 +6,7 @@ from typing import Dict, List, Tuple, Type
 
 import numpy as np
 import pandas as pd
+import polars as pl
 
 warnings.filterwarnings("ignore", "This pattern is interpreted as a regular expression")
 
@@ -15,6 +17,20 @@ array = List[str]
 
 today = datetime.now().strftime("%d%m%Y")
 today_rev = datetime.now().strftime("%Y%m%d")
+
+VALID_STANDARDISE_BACKENDS = {"pandas", "polars"}
+
+
+def _get_standardise_backend() -> str:
+    backend = os.environ.get("STANDARDISE_BACKEND", "pandas").strip().lower()
+    if backend not in VALID_STANDARDISE_BACKENDS:
+        return "pandas"
+    return backend
+
+
+def _use_polars_backend() -> bool:
+    return _get_standardise_backend() == "polars"
+
 
 # # Standardisation functions
 
@@ -466,6 +482,220 @@ def extract_street_name(address: str) -> str:
         return ""
 
 
+def _polars_series_from_pandas(
+    series: pd.Series, col_name: str = "value"
+) -> pl.DataFrame:
+    return pl.DataFrame(
+        {
+            "__row_id__": np.arange(len(series), dtype=np.int64),
+            col_name: series.to_numpy(),
+        }
+    )
+
+
+def _pandas_series_from_polars(
+    frame: pl.DataFrame, source_col: str, index: pd.Index
+) -> pd.Series:
+    return pd.Series(frame[source_col].to_numpy(), index=index)
+
+
+def _extract_letter_one_number_address_polars(col_series: pd.Series) -> pd.Series:
+    pldf = _polars_series_from_pandas(col_series, "addr").with_columns(
+        pl.col("addr").cast(pl.Utf8).alias("addr")
+    )
+    col_lower = pl.col("addr").str.to_lowercase()
+    number_count = col_lower.str.extract_all(r"\d+").list.len()
+    selected_rows = (
+        (number_count <= 1)
+        & col_lower.str.contains(r"\d+(?:[a-z]|[A-Z])")
+        & (~col_lower.str.contains(r"\bflat\b \w+|\bflats\b \w+"))
+        & (~col_lower.str.contains(r"\bapartment\b \w+|\bapartments\b \w+"))
+        & (~col_lower.str.contains(r"\broom\b \w+|\brooms\b \w+"))
+    )
+    updated = (
+        pldf.with_columns(
+            selected_rows.alias("selected_rows"),
+            pl.col("addr").str.extract(r"\d+([a-z]|[A-Z])", 1).alias("extract_letter"),
+            pl.col("addr").str.extract(r"(\d+)[a-z]|[A-Z]", 1).alias("extract_number"),
+        )
+        .with_columns(
+            pl.when(pl.col("selected_rows"))
+            .then(
+                pl.lit("flat ")
+                + pl.col("extract_letter").fill_null("")
+                + pl.lit(" ")
+                + pl.col("extract_number").fill_null("")
+                + pl.lit(" ")
+                + pl.col("addr")
+                .str.replace_all(r"\bflat\b", "")
+                .str.replace_all(r"\d+([a-z]|[A-Z])", "")
+            )
+            .otherwise(None)
+            .alias("letter_after_number")
+        )
+        .with_columns(pl.coalesce(["letter_after_number", "addr"]).alias("new_col"))
+    )
+    return _pandas_series_from_polars(updated, "new_col", col_series.index)
+
+
+def _remove_flat_one_number_address_polars(col_series: pd.Series) -> pd.Series:
+    pldf = _polars_series_from_pandas(col_series, "addr").with_columns(
+        pl.col("addr").cast(pl.Utf8).alias("addr")
+    )
+    col_lower = pl.col("addr").str.to_lowercase()
+    number_count = col_lower.str.extract_all(r"\d+").list.len()
+    selected_rows = (
+        (~(col_lower.str.contains(r"\d+(?:[a-z]|[A-Z])") & (number_count <= 1)))
+        & (~col_lower.str.contains(r"(?:\d+.*?)[^a-zA-Z0-9_].*?\d+"))
+        & (~col_lower.str.contains(r"\b[A-Za-z]\b[^\d]* \d"))
+        & (
+            col_lower.str.contains(r"\bflat\b \w+|\bflats\b \w+")
+            | col_lower.str.contains(r"\bapartment\b \w+|\bapartments\b \w+")
+            | col_lower.str.contains(r"\broom\b \w+|\brooms\b \w+")
+        )
+    )
+    updated = pldf.with_columns(
+        pl.when(selected_rows)
+        .then(
+            pl.col("addr")
+            .str.replace_all(r"(\bapartment\b)|(\bapartments\b)", "")
+            .str.replace_all(r"(\bflat\b)|(\bflats\b)", "")
+            .str.replace_all(r"(\broom\b)|(\brooms\b)", "")
+        )
+        .otherwise(None)
+        .alias("one_number_no_flat")
+    ).with_columns(pl.coalesce(["one_number_no_flat", "addr"]).alias("new_col"))
+    return _pandas_series_from_polars(updated, "new_col", col_series.index)
+
+
+def _replace_floor_flat_polars(col_series: pd.Series) -> pd.Series:
+    pldf = _polars_series_from_pandas(col_series, "addr").with_columns(
+        pl.col("addr").cast(pl.Utf8).alias("addr")
+    )
+    col_lower = pl.col("addr").str.to_lowercase()
+    letter_after_number = _extract_letter_one_number_address_polars(col_series)
+    pldf = pldf.with_columns(
+        pl.Series("letter_after_number", letter_after_number.to_numpy())
+    ).with_columns(pl.coalesce(["letter_after_number", "addr"]).alias("new_col"))
+
+    floor_specs = [
+        ("basement", r"basement", "flat basement", r"\bbasement\b"),
+        ("ground_floor", r"\bground floor\b", "flat a ", r"\bground floor\b"),
+        ("first_floor", r"\bfirst floor\b", "flat b ", r"\bfirst floor\b"),
+        (
+            "ground_and_first_floor",
+            r"\bground and first floor\b",
+            "flat ab ",
+            r"\bground and first floor\b",
+        ),
+        (
+            "basement_ground_and_first_floor",
+            r"\bbasement ground and first floors\b",
+            "flat basementab ",
+            r"\bbasement and ground and first floors\b",
+        ),
+        (
+            "basement_ground_and_first_floor2",
+            r"\bbasement ground and first floors\b",
+            "flat basementab ",
+            r"\bbasement ground and first floors\b",
+        ),
+        ("second_floor", r"\bsecond floor\b", "flat c ", r"\bsecond floor\b"),
+        (
+            "first_and_second_floor",
+            r"\bfirst and second floor\b",
+            "flat bc ",
+            r"\bfirst and second floor\b",
+        ),
+        ("first1_floor", r"\b1st floor\b", "flat b ", r"\b1st floor\b"),
+        ("second2_floor", r"\b2nd floor\b", "flat c ", r"\b2nd floor\b"),
+        (
+            "ground_first_second_floor",
+            r"\bground and first and second floor\b",
+            "flat abc ",
+            r"\bground and first and second floor\b",
+        ),
+        ("third_floor", r"\bthird floor\b", "flat d ", r"\bthird floor\b"),
+        ("third3_floor", r"\b3rd floor\b", "flat d ", r"\b3rd floor\b"),
+        ("top_floor", r"\btop floor\b", "flat top ", r"\btop floor\b"),
+    ]
+
+    for _, contains_pattern, prefix, removal_pattern in floor_specs:
+        pldf = pldf.with_columns(
+            pl.when(col_lower.str.contains(contains_pattern))
+            .then(
+                pl.lit(prefix)
+                + pl.col("addr")
+                .str.replace_all(r"\bflat\b", "")
+                .str.replace_all(removal_pattern, "")
+            )
+            .otherwise(pl.col("new_col"))
+            .alias("new_col")
+        )
+
+    return _pandas_series_from_polars(pldf, "new_col", col_series.index)
+
+
+def _extract_flat_and_other_no_polars(df: pd.DataFrame, col1: str) -> pd.DataFrame:
+    pldf = pl.DataFrame(
+        {
+            "__row_id__": np.arange(len(df), dtype=np.int64),
+            "addr": df[col1].to_numpy(),
+        }
+    ).with_columns(pl.col("addr").cast(pl.Utf8).alias("addr"))
+    addr_lower = pl.col("addr").str.to_lowercase().str.replace(r"^\bflats\b", "flat")
+    number_count = addr_lower.str.extract_all(r"\d+").list.len()
+    starts_number_letter_single = addr_lower.str.contains(r"^\d+([a-z]|[A-Z])") & (
+        number_count <= 1
+    )
+    starts_single_letter_no_numbers = addr_lower.str.contains(r"^([a-z] |[A-Z] )") & (
+        number_count == 0
+    )
+    selected = (
+        starts_number_letter_single
+        | starts_single_letter_no_numbers
+        | addr_lower.str.contains(r"\bflat\b|\bapartment\b")
+        | addr_lower.str.contains(r"(\d+.*?)[^a-zA-Z0-9_].*?\d+")
+    )
+    extracted = pldf.with_columns(
+        pl.when(selected)
+        .then(pl.col("addr").str.replace("no.", ""))
+        .otherwise(None)
+        .alias("replaced")
+    ).with_columns(
+        pl.when(starts_number_letter_single)
+        .then(pl.col("replaced").str.extract(r"^\d+([a-z]|[A-Z])", 1))
+        .otherwise(None)
+        .alias("prop_number"),
+        pl.col("replaced")
+        .str.extract(r"(?i)(?:flat|flats) (\w+)", 1)
+        .alias("flat_number"),
+        pl.col("replaced")
+        .str.extract(r"(?i)(?:apartment|apartments) (\w+)", 1)
+        .alias("apart_number"),
+        pl.col("replaced")
+        .str.extract(r"(\d+.*?)[^a-zA-Z0-9_].*?\d+", 1)
+        .alias("first_sec_number"),
+        pl.col("replaced")
+        .str.extract(r"\b([A-Za-z])\b[^\d]* \d", 1)
+        .alias("first_letter_flat_number"),
+        pl.when(number_count == 0)
+        .then(pl.col("replaced").str.extract(r"^([a-z] |[A-Z] )", 1))
+        .otherwise(None)
+        .alias("first_letter_no_more_numbers"),
+    )
+
+    df["prop_number"] = extracted["prop_number"].to_numpy()
+    df["flat_number"] = extracted["flat_number"].to_numpy()
+    df["apart_number"] = extracted["apart_number"].to_numpy()
+    df["first_sec_number"] = extracted["first_sec_number"].to_numpy()
+    df["first_letter_flat_number"] = extracted["first_letter_flat_number"].to_numpy()
+    df["first_letter_no_more_numbers"] = extracted[
+        "first_letter_no_more_numbers"
+    ].to_numpy()
+    return df
+
+
 def remove_flat_one_number_address(
     df: PandasDataFrame, col1: PandasSeries
 ) -> PandasSeries:
@@ -473,6 +703,9 @@ def remove_flat_one_number_address(
     If there is only one number in the address, and there is no letter after the number,
     remove the word flat from the address
     """
+    if _use_polars_backend():
+        return _remove_flat_one_number_address_polars(df[col1])
+
     col_lower = df[col1].str.lower()
 
     df["contains_letter_after_number"] = col_lower.str.contains(
@@ -548,6 +781,9 @@ def extract_letter_one_number_address(
 
 
     """
+    if _use_polars_backend():
+        return _extract_letter_one_number_address_polars(df[col1])
+
     col_lower = df[col1].str.lower()
 
     df["contains_no_numbers_without_letter"] = col_lower.str.contains(
@@ -621,6 +857,8 @@ def replace_floor_flat(df: PandasDataFrame, col1: PandasSeries) -> PandasSeries:
     flats, this function moves the word 'flat' to the front of the address. This is so that the
     following word (e.g. basement, ground floor) is recognised as the flat number in the 'extract_flat_and_other_no' function
     """
+    if _use_polars_backend():
+        return _replace_floor_flat_polars(df[col1])
 
     df["letter_after_number"] = extract_letter_one_number_address(df, col1)
     col_lower = df[col1].str.lower()
@@ -860,6 +1098,9 @@ def extract_flat_and_other_no(df: PandasDataFrame, col1: PandasSeries) -> Pandas
     # Contain the word "flat" or "apartment".
     # Start with a number, followed by any characters that are not alphanumeric (denoted by [^a-zA-Z0-9_]), and then another number.
 
+    if _use_polars_backend():
+        return _extract_flat_and_other_no_polars(df, col1)
+
     replaced_series = df[
         df[col1]
         .str.lower()
@@ -1089,15 +1330,8 @@ def merge_series(
     Merge two series. The 'full_series' is the series you want to replace values in
     'partially_filled_series' is the replacer series.
     """
-    replacer_series_is_null = partially_filled_series.isnull()
-
-    # Start with full_series values
-    merged_series = full_series.copy()
-
-    # Replace values in merged_series where partially_filled_series is not null
-    merged_series[~replacer_series_is_null] = partially_filled_series.dropna()
-
-    return merged_series
+    # Fast path preserving original semantics (replace non-null from partial series).
+    return partially_filled_series.combine_first(full_series)
 
 
 def clean_cols(col: str) -> str:
