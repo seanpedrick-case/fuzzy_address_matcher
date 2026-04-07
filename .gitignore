@@ -30,3 +30,5 @@ vocab.txt
 word_to_index.txt
 !example_data/search_addresses_london.csv
 !example_data/reference_addresses_london.csv
+/.quarto/
+/_site/
