@@ -1,12 +1,17 @@
-torch
-pandas
-rapidfuzz
-recordlinkage==0.16
-pyap
-pytest
-pyarrow
-openpyxl
-gradio==6.0.2
-boto3
-polars
-numpy
+# PyTorch (neural-net stage): install separately, e.g.
+#   pip install -r requirements_nnet.txt
+# or: pip install '.[nnet]' (see pyproject.toml)
+pandas<=2.33
+rapidfuzz<=3.14.3
+recordlinkage<=0.16
+pyap<=0.3.1
+pytest<=9.0.2
+pyarrow<=23.0.1
+openpyxl<=3.1.5
+gradio==6.11.0
+boto3<=1.42.80
+polars<=1.39.3
+numpy<=2.4.3
+requests<=2.33.1
+bleach<=6.3.0
+python-dotenv<=1.2.2

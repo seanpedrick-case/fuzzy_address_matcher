@@ -9,6 +9,9 @@
 *.zip
 *.pth
 test/*
+!test/
+!test/**/*.py
+!test/**/*.csv
 deprecated_models/*
 .ipynb_checkpoints/*
 orchestration/*
@@ -22,6 +25,15 @@ logs/*
 feedback/*
 input/*
 output/*
+docs/*
+fuzzy_address_matcher.egg-info/*
+*.done
+*.lock
 cat_to_idx.txt
 vocab.txt
 word_to_index.txt
+!example_data/search_addresses_london.csv
+!example_data/reference_addresses_london.csv
+/.quarto/
+/_site/
+**/*.quarto_ipynb

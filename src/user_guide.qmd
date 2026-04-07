@@ -1,0 +1,115 @@
+---
+title: "User guide"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    toc-title: "On this page"
+---
+
+## Overview
+
+The Fuzzy address matcher app compares your search addresses against a reference source and produces match outputs for review.
+
+You can run matching in two ways:
+
+- Batch mode using uploaded files (CSV, XLSX, or Parquet).
+- Single-address mode using a text input.
+
+The app is intended for UK address workflows. Where postcodes are used, keep postcode as the last selected address component when possible.
+
+## Before you start
+
+- Prepare a search dataset containing the address fields you want to match.
+- Decide whether your reference source is:
+  - A reference file upload, or
+  - The AddressBase API.
+- Identify any columns you want to keep as join columns in output.
+- If your search file already contains prior match fields, identify those columns so they can be preserved in results.
+
+## Match workflow in the app
+
+1. Upload one or more search files in **Match multiple addresses in a CSV/XLSX/Parquet file**.
+2. Choose search address columns in **Address columns in search data**.
+3. Optionally choose **Columns indicating existing address matches**.
+4. Optionally enable **Use postcode blocker**.
+5. Optionally provide **Single address input** for one-off matching.
+6. Choose a reference route:
+   - Use **Addressbase API** and provide API mode/key, or
+   - Upload a reference file.
+7. For reference-file matching, choose:
+   - **Reference address columns**
+   - **Reference join columns**
+8. Click **Match addresses**.
+9. Review:
+   - Summary text
+   - Downloadable output files
+   - Summary table markdown
+
+## Input reference (`fuzzy_address_match`)
+
+The app calls `fuzzy_address_match(...)` with these user-facing inputs.
+
+### Search inputs
+
+- `in_file`: uploaded search file(s).
+- `in_text`: optional single address text.
+- `in_colnames`: selected search address columns.
+- `in_existing`: optional existing match columns to preserve.
+
+### Reference inputs
+
+- `in_ref`: uploaded reference file(s).
+- `in_refcol`: selected reference address columns.
+- `in_joincol`: reference columns to keep in output.
+
+### API inputs
+
+- `in_api`: API route option (for example postcode-based mode).
+- `in_api_key`: API key used for AddressBase access.
+
+### Matching behavior inputs
+
+- `use_postcode_blocker`: prefer postcode-based blocking when possible.
+
+## Outputs and how to interpret them
+
+The function returns:
+
+- `final_summary`: run summary text used in the app summary panel.
+- `output_files`: downloadable output paths shown in the app.
+- `estimate_total_processing_time`: estimated runtime in seconds.
+- `summary_table_md`: markdown summary table rendered in the app.
+
+### Typical output files
+
+Depending on your run, output files usually include:
+
+- Main results on original search rows (joined search + match/reference fields).
+- A match diagnostics output with match method and scoring details.
+- A summary CSV with counts and percentages by inclusion/match status.
+- API artifact output when API mode is used.
+
+### Key result concepts
+
+- **Excluded from search**: records skipped due to input quality or rule checks.
+- **Matched with reference address**: whether a reference match was found.
+- **Reference matched address**: the selected reference address for matched rows.
+- **Reference file**: source reference file used for the match.
+- **Reason for exclusion**: why a record was not eligible for matching.
+
+## Guardrails and common issues
+
+- If no search input is supplied, matching does not run.
+- If neither reference file nor API is supplied, matching does not run.
+- If reference matching is used without selecting reference address columns, matching does not run.
+- If file-based search is used without selecting search address columns, matching does not run.
+- If loaded search/reference data is empty, there is nothing to match.
+
+When postcode blocking is enabled but usable postcodes are unavailable, the workflow can fall back to street-only blocking.
+
+## Good practice
+
+- Keep postcode as the final selected address component where applicable.
+- Review unmatched and excluded records before downstream use.
+- Treat results as candidate matches requiring validation rather than final truth.
