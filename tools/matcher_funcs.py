@@ -1196,9 +1196,10 @@ def load_match_data_and_filter(
     if in_api:
 
         if in_file:
-            output_message, drop1, drop2, df, results_data_state = initial_data_load(
-                in_file
-            )
+            _loaded = initial_data_load(in_file)
+            # `initial_data_load` may return 5 or 6 values depending on UI needs.
+            # We only need the first 5 here.
+            output_message, drop1, drop2, df, results_data_state = _loaded[:5]
 
             file_list = [string.name for string in in_file]
             data_file_names = [

@@ -26,6 +26,8 @@ feedback/*
 input/*
 output/*
 fuzzy_address_matcher.egg-info/*
+*.done
+*.lock
 cat_to_idx.txt
 vocab.txt
 word_to_index.txt
