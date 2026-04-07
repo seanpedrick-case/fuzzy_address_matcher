@@ -498,8 +498,6 @@ with block:
 
 # Launch the Gradio app
 
-# print(f"The value of COGNITO_AUTH is {COGNITO_AUTH}")
-
 if __name__ == "__main__":
     if COGNITO_AUTH:
         block.queue().launch(
