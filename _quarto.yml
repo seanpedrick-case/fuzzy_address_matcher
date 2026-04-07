@@ -1,6 +1,9 @@
 project:
   type: website
   output-dir: docs
+  render:
+    - index.qmd
+    - src/user_guide.qmd
 
 website:
   title: "Fuzzy address matcher"
