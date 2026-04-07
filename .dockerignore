@@ -25,6 +25,7 @@ logs/*
 feedback/*
 input/*
 output/*
+docs/*
 fuzzy_address_matcher.egg-info/*
 *.done
 *.lock

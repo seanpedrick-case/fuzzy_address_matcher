@@ -25,6 +25,7 @@ logs/*
 feedback/*
 input/*
 output/*
+docs/*
 fuzzy_address_matcher.egg-info/*
 *.done
 *.lock
@@ -35,3 +36,4 @@ word_to_index.txt
 !example_data/reference_addresses_london.csv
 /.quarto/
 /_site/
+**/*.quarto_ipynb
