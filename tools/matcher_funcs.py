@@ -323,12 +323,11 @@ def query_addressbase_api(
     in_api_key: str,
     Matcher: MatcherClass,
     query_type: str,
+    output_folder_override: Optional[str] = None,
     progress=gr.Progress(track_tqdm=True),
 ):
 
     final_api_output_file_name = ""
-
-    print("in_api_key: ", in_api_key)
 
     if in_api_key == "":
         print("No API key provided, please provide one to continue")
@@ -356,6 +355,10 @@ def query_addressbase_api(
                 print(f"Environmental variable found: {api_folder_path}")
 
             return api_folder_path
+
+        base_output_folder = output_folder_override or output_folder
+        if not base_output_folder.endswith(("\\", "/")):
+            base_output_folder = base_output_folder + os.sep
 
         api_output_folder = check_and_create_api_folder()
 
@@ -410,7 +413,8 @@ def query_addressbase_api(
                 print("Saving api call checkpoint for query:", str(i + 1))
 
                 pd.concat(loop_list).to_parquet(
-                    output_folder + api_ref_save_loc + ".parquet", index=False
+                    os.path.join(base_output_folder, api_ref_save_loc + ".parquet"),
+                    index=False,
                 )
 
             return loop_list
@@ -712,13 +716,16 @@ def query_addressbase_api(
             # Matcher.ref_df = Matcher.ref_df.loc[Matcher.ref_df["LOCAL_CUSTODIAN_CODE"] != 7655,:]
 
         if save_file:
-            final_api_output_file_name_pq = (
-                output_folder + api_ref_save_loc[:-5] + ".parquet"
+            final_api_output_file_name_pq = os.path.join(
+                base_output_folder, api_ref_save_loc[:-5] + ".parquet"
             )
-            final_api_output_file_name = output_folder + api_ref_save_loc[:-5] + ".csv"
+            final_api_output_file_name = os.path.join(
+                base_output_folder, api_ref_save_loc[:-5] + ".csv"
+            )
             print("Saving reference file to: " + api_ref_save_loc[:-5] + ".parquet")
             Matcher.ref_df.to_parquet(
-                output_folder + api_ref_save_loc + ".parquet", index=False
+                os.path.join(base_output_folder, api_ref_save_loc + ".parquet"),
+                index=False,
             )  # Save checkpoint as well
             Matcher.ref_df.to_parquet(final_api_output_file_name_pq, index=False)
             Matcher.ref_df.to_csv(final_api_output_file_name)
@@ -739,6 +746,7 @@ def load_ref_data(
     in_api_key: str,
     query_type: str,
     use_postcode_blocker: bool = True,
+    output_folder_override: Optional[str] = None,
     progress=gr.Progress(track_tqdm=True),
 ):
     """
@@ -767,7 +775,10 @@ def load_ref_data(
             # Check if api call required and api key is provided
             else:
                 Matcher, final_api_output_file_name = query_addressbase_api(
-                    in_api_key, Matcher, query_type
+                    in_api_key,
+                    Matcher,
+                    query_type,
+                    output_folder_override=output_folder_override,
                 )
 
         else:
@@ -1275,6 +1286,7 @@ def load_matcher_data(
     in_api: str,
     in_api_key: str,
     use_postcode_blocker: bool = True,
+    output_folder_override: Optional[str] = None,
 ) -> tuple:
     """
     Load and preprocess user inputs from the Gradio interface for address matching.
@@ -1311,6 +1323,11 @@ def load_matcher_data(
     # Abort flag for if it's not even possible to attempt the first stage of the match for some reason
     Matcher.abort_flag = False
 
+    effective_output_folder = output_folder_override or output_folder
+    if effective_output_folder and (not effective_output_folder.endswith(("\\", "/"))):
+        effective_output_folder = effective_output_folder + os.sep
+    Matcher.output_folder = effective_output_folder
+
     ### ref_df FILES ###
     # If not an API call, run this first
     if not in_api:
@@ -1323,6 +1340,7 @@ def load_matcher_data(
             in_api_key,
             query_type=in_api,
             use_postcode_blocker=use_postcode_blocker,
+            output_folder_override=effective_output_folder,
         )
 
     ### MATCH/SEARCH FILES ###
@@ -1351,16 +1369,17 @@ def load_matcher_data(
             in_api_key,
             query_type=in_api,
             use_postcode_blocker=use_postcode_blocker,
+            output_folder_override=effective_output_folder,
         )
 
     print("Shape of ref_df after filtering is: ", Matcher.ref_df.shape)
     print("Shape of search_df after filtering is: ", Matcher.search_df.shape)
 
     Matcher.match_outputs_name = (
-        output_folder + "diagnostics_initial_" + today_rev + ".csv"
+        effective_output_folder + "diagnostics_initial_" + today_rev + ".csv"
     )
     Matcher.results_orig_df_name = (
-        output_folder + "results_initial_" + today_rev + ".csv"
+        effective_output_folder + "results_initial_" + today_rev + ".csv"
     )
 
     if "fuzzy_score" in Matcher.match_results_output.columns:
@@ -1393,6 +1412,7 @@ def fuzzy_address_match(
     in_api: Optional[str] = None,
     in_api_key: Optional[str] = None,
     use_postcode_blocker: bool = USE_POSTCODE_BLOCKER,
+    output_folder_override: Optional[str] = None,
     run_batches_in_parallel: bool = RUN_BATCHES_IN_PARALLEL,
     max_parallel_workers: Optional[int] = MAX_PARALLEL_WORKERS,
     InitMatch: MatcherClass = InitMatch,
@@ -1439,6 +1459,7 @@ def fuzzy_address_match(
         in_api: API mode / query type. If falsy, the reference data is loaded from `in_ref`.
         in_api_key: API key used when `in_api` is provided.
         use_postcode_blocker: If True, apply postcode-based blocking to reduce candidate comparisons.
+        output_folder_override: Optional override for the output folder.
         run_batches_in_parallel: If True, process batches concurrently using multiple workers.
         max_parallel_workers: Maximum number of parallel workers (only used when parallel batching is enabled).
         InitMatch: Matcher object (or class instance) that carries configuration and intermediate state.
@@ -1479,6 +1500,11 @@ def fuzzy_address_match(
                 return [_FilePathLike(v) for v in value]
             return value
         return [_FilePathLike(str(value))]
+
+    effective_output_folder = output_folder_override or output_folder
+    if effective_output_folder and (not effective_output_folder.endswith(("\\", "/"))):
+        effective_output_folder = effective_output_folder + os.sep
+    InitMatch.output_folder = effective_output_folder
 
     def _notify_ui(level: str, message: str) -> None:
         """
@@ -1597,6 +1623,7 @@ def fuzzy_address_match(
         in_api,
         in_api_key,
         use_postcode_blocker=use_postcode_blocker,
+        output_folder_override=effective_output_folder,
     )
 
     if final_api_output_file_name:
@@ -2090,7 +2117,10 @@ def fuzzy_address_match(
     summary_table_md = "## Summary table\n\n" + results_summary_table_to_markdown(
         summary_table_df
     )
-    summary_table_name = output_folder + "summary_" + today_rev + ".csv"
+    _out_folder = getattr(OutputMatch, "output_folder", None) or output_folder
+    if _out_folder and (not _out_folder.endswith(("\\", "/"))):
+        _out_folder = _out_folder + os.sep
+    summary_table_name = _out_folder + "summary_" + today_rev + ".csv"
     summary_table_df.to_csv(summary_table_name, index=False)
 
     _em_col = None
@@ -2777,11 +2807,14 @@ def orchestrate_single_match_batch(
         Matcher.match_results_output, df_name=df_name
     )
 
+    _out_folder = getattr(Matcher, "output_folder", None) or output_folder
+    if _out_folder and (not _out_folder.endswith(("\\", "/"))):
+        _out_folder = _out_folder + os.sep
     Matcher.match_outputs_name = (
-        output_folder + "diagnostics_" + file_stub + today_rev + ".csv"
+        _out_folder + "diagnostics_" + file_stub + today_rev + ".csv"
     )
     Matcher.results_orig_df_name = (
-        output_folder + "results_" + file_stub + today_rev + ".csv"
+        _out_folder + "results_" + file_stub + today_rev + ".csv"
     )
 
     if "fuzzy_score" in Matcher.match_results_output.columns:
@@ -3536,18 +3569,23 @@ def combine_two_matches(
         .astype(bool)
     )
 
-    found_index = NewMatchClass.results_on_orig_df.loc[
-        matched_mask,
-        NewMatchClass.search_df_key_field,
-    ].astype(int)
+    # Normalise key values to integers where possible.
+    # API inputs can yield string forms like "0.0" which break `.astype(int)`.
+    found_index = pd.to_numeric(
+        NewMatchClass.results_on_orig_df.loc[
+            matched_mask, NewMatchClass.search_df_key_field
+        ],
+        errors="coerce",
+    ).astype("Int64")
 
-    key_field_values = NewMatchClass.search_df_not_matched[
-        NewMatchClass.search_df_key_field
-    ].astype(
-        int
-    )  # Assuming list conversion is suitable
+    key_field_values = pd.to_numeric(
+        NewMatchClass.search_df_not_matched[NewMatchClass.search_df_key_field],
+        errors="coerce",
+    ).astype("Int64")
 
-    rows_to_drop = key_field_values[key_field_values.isin(found_index)].tolist()
+    rows_to_drop = (
+        key_field_values[key_field_values.isin(found_index)].dropna().tolist()
+    )
     NewMatchClass.search_df_not_matched = NewMatchClass.search_df_not_matched.loc[
         ~NewMatchClass.search_df_not_matched[NewMatchClass.search_df_key_field].isin(
             rows_to_drop
@@ -3557,16 +3595,15 @@ def combine_two_matches(
 
     # Filter out rows from NewMatchClass.search_df_cleaned
 
-    filtered_rows_to_keep = (
-        NewMatchClass.search_df_cleaned[NewMatchClass.search_df_key_field]
-        .astype(int)
-        .isin(
-            NewMatchClass.search_df_not_matched[
-                NewMatchClass.search_df_key_field
-            ].astype(int)
-        )
-        .to_list()
-    )
+    _cleaned_keys = pd.to_numeric(
+        NewMatchClass.search_df_cleaned[NewMatchClass.search_df_key_field],
+        errors="coerce",
+    ).astype("Int64")
+    _not_matched_keys = pd.to_numeric(
+        NewMatchClass.search_df_not_matched[NewMatchClass.search_df_key_field],
+        errors="coerce",
+    ).astype("Int64")
+    filtered_rows_to_keep = _cleaned_keys.isin(_not_matched_keys).to_list()
 
     NewMatchClass.search_df_cleaned = NewMatchClass.search_df_cleaned.loc[
         filtered_rows_to_keep, :
@@ -3648,12 +3685,11 @@ def combine_two_matches(
     ### Rejoin the excluded matches onto the output file
     # NewMatchClass.results_on_orig_df = pd.concat([NewMatchClass.results_on_orig_df, NewMatchClass.excluded_df])
 
-    NewMatchClass.match_outputs_name = (
-        output_folder + "diagnostics_" + today_rev + ".csv"
-    )  # + NewMatchClass.file_name + "_"
-    NewMatchClass.results_orig_df_name = (
-        output_folder + "results_" + today_rev + ".csv"
-    )  # + NewMatchClass.file_name + "_"
+    _out_folder = getattr(NewMatchClass, "output_folder", None) or output_folder
+    if _out_folder and (not _out_folder.endswith(("\\", "/"))):
+        _out_folder = _out_folder + os.sep
+    NewMatchClass.match_outputs_name = _out_folder + "diagnostics_" + today_rev + ".csv"
+    NewMatchClass.results_orig_df_name = _out_folder + "results_" + today_rev + ".csv"
 
     _em_col_btch = None
     if NewMatchClass.existing_match_cols:

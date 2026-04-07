@@ -164,7 +164,7 @@ with block:
     ref_results_data_state = gr.State(pd.DataFrame())
 
     session_hash_state = gr.State()
-    s3_output_folder_state = gr.State()
+    session_output_folder_state = gr.State()
 
     # Logging state
     feedback_logs_state = gr.State(feedback_logs_folder + FEEDBACK_LOG_FILE_NAME)
@@ -395,6 +395,7 @@ with block:
             in_api,
             in_api_key,
             use_postcode_blocker,
+            session_output_folder_state,
         ],
         outputs=[
             output_summary,
@@ -405,6 +406,27 @@ with block:
         api_name="fuzzy_address_match",
         show_progress_on=[output_file],
     ).then(
+        # Write one usage-log row per match run.
+        fn=lambda *args: usage_callback.flag(
+            list(args),
+            save_to_csv=SAVE_LOGS_TO_CSV,
+            save_to_dynamodb=SAVE_LOGS_TO_DYNAMODB,
+            dynamodb_table_name=USAGE_LOG_DYNAMODB_TABLE_NAME,
+            dynamodb_headers=DYNAMODB_USAGE_LOG_HEADERS,
+            replacement_headers=CSV_USAGE_LOG_HEADERS,
+        ),
+        inputs=[
+            session_hash_textbox,
+            data_file_names_end,
+            ref_data_file_names_end,
+            estimated_time_taken_number,
+        ],
+        outputs=None,
+    ).then(
+        fn=upload_file_to_s3,
+        inputs=[usage_logs_state, usage_s3_logs_loc_state],
+        outputs=[s3_logs_output_textbox],
+    ).then(
         fn=reveal_feedback_buttons,
         outputs=[
             feedback_radio,
@@ -414,32 +436,9 @@ with block:
         ],
     )
 
-    # Get connection details on app load
-    block.load(
-        get_connection_params,
-        inputs=None,
-        outputs=[session_hash_state, s3_output_folder_state, session_hash_textbox],
-    )
-
     # Log usernames and times of access to file (to know who is using the app when running on AWS)
     access_callback = CSVLogger_custom(dataset_file_name=LOG_FILE_NAME)
     access_callback.setup([session_hash_textbox], access_logs_folder)
-    session_hash_textbox.change(
-        fn=lambda *args: access_callback.flag(
-            list(args),
-            save_to_csv=SAVE_LOGS_TO_CSV,
-            save_to_dynamodb=SAVE_LOGS_TO_DYNAMODB,
-            dynamodb_table_name=ACCESS_LOG_DYNAMODB_TABLE_NAME,
-            dynamodb_headers=DYNAMODB_ACCESS_LOG_HEADERS,
-            replacement_headers=CSV_ACCESS_LOG_HEADERS,
-        ),
-        inputs=[session_hash_textbox],
-        outputs=None,
-    ).then(
-        fn=upload_file_to_s3,
-        inputs=[access_logs_state, access_s3_logs_loc_state],
-        outputs=[s3_logs_output_textbox],
-    )
 
     # User submitted feedback for pdf redactions
     feedback_callback = CSVLogger_custom(dataset_file_name=FEEDBACK_LOG_FILE_NAME)
@@ -474,25 +473,30 @@ with block:
         ],
         usage_logs_folder,
     )
-    estimated_time_taken_number.change(
-        fn=lambda *args: usage_callback.flag(
+
+    # Get connection details on app load, then log access immediately.
+    block.load(
+        get_connection_params,
+        inputs=None,
+        outputs=[
+            session_hash_state,
+            session_output_folder_state,
+            session_hash_textbox,
+        ],
+    ).then(
+        fn=lambda *args: access_callback.flag(
             list(args),
             save_to_csv=SAVE_LOGS_TO_CSV,
             save_to_dynamodb=SAVE_LOGS_TO_DYNAMODB,
-            dynamodb_table_name=USAGE_LOG_DYNAMODB_TABLE_NAME,
-            dynamodb_headers=DYNAMODB_USAGE_LOG_HEADERS,
-            replacement_headers=CSV_USAGE_LOG_HEADERS,
+            dynamodb_table_name=ACCESS_LOG_DYNAMODB_TABLE_NAME,
+            dynamodb_headers=DYNAMODB_ACCESS_LOG_HEADERS,
+            replacement_headers=CSV_ACCESS_LOG_HEADERS,
         ),
-        inputs=[
-            session_hash_textbox,
-            data_file_names_end,
-            ref_data_file_names_end,
-            estimated_time_taken_number,
-        ],
+        inputs=[session_hash_textbox],
         outputs=None,
     ).then(
         fn=upload_file_to_s3,
-        inputs=[usage_logs_state, usage_s3_logs_loc_state],
+        inputs=[access_logs_state, access_s3_logs_loc_state],
         outputs=[s3_logs_output_textbox],
     )
 

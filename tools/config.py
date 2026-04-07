@@ -342,12 +342,18 @@ AWS_CLIENT_ID = get_or_create_env_var("AWS_CLIENT_ID", "")
 AWS_USER_POOL_ID = get_or_create_env_var("AWS_USER_POOL_ID", "")
 AWS_CLIENT_SECRET = get_or_create_env_var("AWS_CLIENT_SECRET", "")
 
+# Custom headers e.g. if routing traffic through Cloudfront
+# Retrieving or setting CUSTOM_HEADER
+CUSTOM_HEADER = get_or_create_env_var("CUSTOM_HEADER", "")
+# Retrieving or setting CUSTOM_HEADER_VALUE
+CUSTOM_HEADER_VALUE = get_or_create_env_var("CUSTOM_HEADER_VALUE", "")
+
 LOG_FILE_NAME = get_or_create_env_var("LOG_FILE_NAME", "log.csv")
 USAGE_LOG_FILE_NAME = get_or_create_env_var("USAGE_LOG_FILE_NAME", LOG_FILE_NAME)
 FEEDBACK_LOG_FILE_NAME = get_or_create_env_var("FEEDBACK_LOG_FILE_NAME", LOG_FILE_NAME)
 
 SAVE_LOGS_TO_CSV = convert_string_to_boolean(
-    get_or_create_env_var("SAVE_LOGS_TO_CSV", "False")
+    get_or_create_env_var("SAVE_LOGS_TO_CSV", "True")
 )
 SAVE_LOGS_TO_DYNAMODB = convert_string_to_boolean(
     get_or_create_env_var("SAVE_LOGS_TO_DYNAMODB", "False")
@@ -443,22 +449,32 @@ SHOW_EXAMPLES = convert_string_to_boolean(
 ## Addressbase
 ADDRESSBASE_API_KEY = get_or_create_env_var("ADDRESSBASE_API_KEY", "")
 
-
 ###
 # Address matcher tuning (also used by tools/constants.py — load after dotenv so
 # config/app_config.env can override). All can be set via environment variables.
 ###
 
+###
+# File I/O options
+###
+
+SESSION_OUTPUT_FOLDER = convert_string_to_boolean(
+    get_or_create_env_var("SESSION_OUTPUT_FOLDER", "False")
+)  # i.e. do you want your input and output folders saved within a subfolder based on session hash value within output/input folders
+
 _DEFAULT_GRADIO_OUTPUT = "output/"
 _raw_gradio_output = get_or_create_env_var(
     "GRADIO_OUTPUT_FOLDER", _DEFAULT_GRADIO_OUTPUT
 )
+
 # When the output folder is the default relative "output/", neural-net model extract uses project root.
 MODEL_EXTRACT_USE_PROJECT_ROOT = _raw_gradio_output.replace("\\", "/").strip() in (
     "output",
     "output/",
 )
 output_folder = ensure_folder_within_app_directory(_raw_gradio_output)
+
+OUTPUT_FOLDER = output_folder
 
 fuzzy_scorer_used = get_or_create_env_var("FUZZY_SCORER_USED", "token_set_ratio")
 fuzzy_match_limit = _env_int("FUZZY_MATCH_LIMIT", 85)

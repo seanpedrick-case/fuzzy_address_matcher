@@ -1059,6 +1059,6 @@ def create_results_df(
         r"^nan$", "", regex=True
     )
 
-    results_for_orig_df_join.to_csv("output/results_for_orig_df_join.csv")
+    # results_for_orig_df_join.to_csv("results_for_orig_df_join.csv")
 
     return results_for_orig_df_join
