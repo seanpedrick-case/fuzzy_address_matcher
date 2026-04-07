@@ -1,0 +1,19 @@
+project:
+  type: website
+  output-dir: docs
+
+website:
+  title: "Address Matcher"
+  page-navigation: true
+  back-to-top-navigation: true
+  search: true
+  navbar:
+    left:
+      - href: index.qmd
+        text: Home
+      - href: src/user_guide.qmd
+        text: User guide
+
+format:
+  html:
+    theme: cosmo

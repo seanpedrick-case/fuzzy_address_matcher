@@ -1,0 +1,18 @@
+---
+title: "Home"
+---
+
+# Fuzzy address matcher
+
+Address Matcher helps you compare search addresses against a trusted reference list (or AddressBase API) and produce candidate matches for review.
+
+Use this guide to understand the workflow, required inputs, and output files produced by the matching process.
+
+- Start with the [User guide](src/user_guide.qmd) for step-by-step instructions.
+- Review all match outputs before operational use, especially when records are excluded or low-confidence.
+
+## What this documentation covers
+
+- How to run matching from the app interface.
+- How input fields map to matching behavior.
+- What output files are produced and how to interpret them.
