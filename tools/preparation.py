@@ -95,10 +95,32 @@ def prepare_search_address(
     # Add postcode column
     full_df = _add_postcode_column(clean_addresses, postcode_col)
 
-    # Remove postcode from main address if there was only one column in the input
-    if postcode_col == "full_address_postcode":
-        # Remove postcode from address
+    postcode_col_name = (
+        postcode_col[0]
+        if isinstance(postcode_col, list) and len(postcode_col) > 0
+        else postcode_col
+    )
+
+    # For single-column input, split out postcode from the full address and then
+    # recompose with exactly one space between address and postcode.
+    if postcode_col_name == "full_address_postcode":
         full_df["full_address"] = remove_postcode(full_df, "full_address")
+        full_df = _clean_columns(full_df, ["full_address"])
+
+        full_df["postcode"] = (
+            full_df["postcode"]
+            .fillna("")
+            .astype(str)
+            .str.upper()
+            .str.replace(r"\s{2,}", " ", regex=True)
+            .str.strip()
+        )
+        has_postcode = full_df["postcode"].ne("")
+        full_df.loc[has_postcode, "full_address"] = (
+            full_df.loc[has_postcode, "full_address"].astype(str).str.strip()
+            + " "
+            + full_df.loc[has_postcode, "postcode"]
+        ).str.strip()
 
     # Ensure index column
     final_df = _ensure_index(full_df, key_col)
@@ -278,7 +300,11 @@ def prepare_ref_address(
     ):
         ref_df_cleaned["Organisation"] = ""
 
-    ref_df_cleaned = ref_df_cleaned[ref_address_cols_uprn_w_ref]
+    # Only keep columns that exist (e.g. UPRN may be absent in user-supplied ref data).
+    ref_address_cols_uprn_w_ref_present = [
+        col for col in ref_address_cols_uprn_w_ref if col in ref_df_cleaned.columns
+    ]
+    ref_df_cleaned = ref_df_cleaned[ref_address_cols_uprn_w_ref_present]
 
     ref_df_cleaned = ref_df_cleaned.fillna("").infer_objects(copy=False)
 
@@ -303,23 +329,27 @@ def prepare_ref_address(
 
     if standard_cols:
         ref_df_cleaned = (
-            ref_df_cleaned[ref_address_cols_uprn_w_ref]
+            ref_df_cleaned[ref_address_cols_uprn_w_ref_present]
             .fillna("")
             .infer_objects(copy=False)
         )
 
         ref_df_cleaned["fulladdress"] = create_full_address(
-            ref_df_cleaned[ref_address_cols_uprn_w_ref]
+            ref_df_cleaned[ref_address_cols_uprn_w_ref_present]
         )
 
     else:
         ref_df_cleaned = (
-            ref_df_cleaned[ref_address_cols_uprn_w_ref]
+            ref_df_cleaned[ref_address_cols_uprn_w_ref_present]
             .fillna("")
             .infer_objects(copy=False)
         )
 
-        full_address = ref_df_cleaned[ref_address_cols].apply(
+        # `ref_address_cols` can include optional fields (e.g. UPRN). Only use those present.
+        ref_address_cols_present = [
+            col for col in ref_address_cols if col in ref_df_cleaned.columns
+        ]
+        full_address = ref_df_cleaned[ref_address_cols_present].apply(
             lambda row: " ".join(row.values.astype(str)), axis=1
         )
         ref_df_cleaned["fulladdress"] = full_address

@@ -353,6 +353,33 @@ SAVE_LOGS_TO_DYNAMODB = convert_string_to_boolean(
     get_or_create_env_var("SAVE_LOGS_TO_DYNAMODB", "False")
 )
 
+FEEDBACK_LOGS_FOLDER = get_or_create_env_var("FEEDBACK_LOGS_FOLDER", "feedback/")
+ACCESS_LOGS_FOLDER = get_or_create_env_var("ACCESS_LOGS_FOLDER", "logs/")
+USAGE_LOGS_FOLDER = get_or_create_env_var("USAGE_LOGS_FOLDER", "usage/")
+
+# Ensure log folders are within app directory before adding subfolders
+FEEDBACK_LOGS_FOLDER = ensure_folder_within_app_directory(FEEDBACK_LOGS_FOLDER)
+ACCESS_LOGS_FOLDER = ensure_folder_within_app_directory(ACCESS_LOGS_FOLDER)
+USAGE_LOGS_FOLDER = ensure_folder_within_app_directory(USAGE_LOGS_FOLDER)
+
+USE_LOG_SUBFOLDERS = convert_string_to_boolean(
+    get_or_create_env_var("USE_LOG_SUBFOLDERS", "True")
+)
+
+if USE_LOG_SUBFOLDERS:
+    day_log_subfolder = today_rev + "/"
+    host_name_subfolder = HOST_NAME + "/"
+    full_log_subfolder = day_log_subfolder + host_name_subfolder
+
+    FEEDBACK_LOGS_FOLDER = FEEDBACK_LOGS_FOLDER + full_log_subfolder
+    ACCESS_LOGS_FOLDER = ACCESS_LOGS_FOLDER + full_log_subfolder
+    USAGE_LOGS_FOLDER = USAGE_LOGS_FOLDER + full_log_subfolder
+
+    # Re-validate after adding subfolders to ensure still within app directory
+    FEEDBACK_LOGS_FOLDER = ensure_folder_within_app_directory(FEEDBACK_LOGS_FOLDER)
+    ACCESS_LOGS_FOLDER = ensure_folder_within_app_directory(ACCESS_LOGS_FOLDER)
+    USAGE_LOGS_FOLDER = ensure_folder_within_app_directory(USAGE_LOGS_FOLDER)
+
 ACCESS_LOG_DYNAMODB_TABLE_NAME = get_or_create_env_var(
     "ACCESS_LOG_DYNAMODB_TABLE_NAME", "address-matcher-access-logs"
 )
@@ -408,6 +435,9 @@ RUN_BATCHES_IN_PARALLEL = convert_string_to_boolean(
 
 SHOW_FEEDBACK = convert_string_to_boolean(
     get_or_create_env_var("SHOW_FEEDBACK", "False")
+)
+SHOW_EXAMPLES = convert_string_to_boolean(
+    get_or_create_env_var("SHOW_EXAMPLES", "True")
 )
 
 ## Addressbase

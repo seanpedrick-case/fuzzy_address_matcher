@@ -5,7 +5,7 @@ import re
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple, Type
+from typing import Dict, List, Optional, Tuple
 
 import gradio as gr
 import numpy as np
@@ -60,8 +60,8 @@ from tools.standardise import remove_postcode, standardise_wrapper_func
 # (max_predict_len, MatcherClass imported above)
 
 # Type aliases / module globals (must come after imports)
-PandasDataFrame = Type[pd.DataFrame]
-PandasSeries = Type[pd.Series]
+PandasDataFrame = pd.DataFrame
+PandasSeries = pd.Series
 MatchedResults = Dict[str, Tuple[str, int]]
 array = List[str]
 
@@ -955,9 +955,14 @@ def load_match_data_and_filter(
 
     # If no file loaded yet and a file has been selected
     if Matcher.search_df.empty and in_file:
-        output_message, drop1, drop2, Matcher.search_df, results_data_state = (
-            initial_data_load(in_file)
-        )
+        (
+            output_message,
+            drop1,
+            drop2,
+            Matcher.search_df,
+            results_data_state,
+            _data_file_names_end,
+        ) = initial_data_load(in_file)
 
         file_list = [string.name for string in in_file]
         data_file_names = [
@@ -1040,8 +1045,13 @@ def load_match_data_and_filter(
     ### Filter addresses to those with length > 0
     zero_length_search_df = Matcher.search_df.copy()[Matcher.search_address_cols]
     zero_length_search_df = zero_length_search_df.fillna("").infer_objects(copy=False)
+    # Join with spaces (not raw string concatenation) so excluded rows keep a readable
+    # "Search data address" when this helper column is used downstream.
     Matcher.search_df["address_cols_joined"] = (
-        zero_length_search_df.astype(str).sum(axis=1).str.strip()
+        zero_length_search_df.astype(str)
+        .apply(lambda row: " ".join(row.values), axis=1)
+        .str.replace(r"\s{2,}", " ", regex=True)
+        .str.strip()
     )
 
     length_more_than_0 = Matcher.search_df["address_cols_joined"].str.len() > 0
@@ -1071,9 +1081,11 @@ def load_match_data_and_filter(
                 .str[:-2]
             )
 
+            # Keep valid outward-code style areas, including one-letter areas
+            # (e.g. E2 -> "E20" after current normalisation/slicing).
             unique_ref_pcode_area = (
                 Matcher.ref_df["postcode_search_area"][
-                    Matcher.ref_df["postcode_search_area"].str.len() > 3
+                    Matcher.ref_df["postcode_search_area"].str.len() > 2
                 ]
             ).unique()
             postcode_found_in_search = Matcher.search_df["postcode_search_area"].isin(
@@ -1364,37 +1376,203 @@ def load_matcher_data(
 
 
 # Run whole matcher process
-def run_matcher(
-    in_text: str,
-    in_file: str,
-    in_ref: str,
-    data_state: PandasDataFrame,
-    results_data_state: PandasDataFrame,
-    ref_data_state: PandasDataFrame,
-    in_colnames: List[str],
-    in_refcol: List[str],
-    in_joincol: List[str],
-    in_existing: List[str],
-    in_api: str,
-    in_api_key: str,
+def fuzzy_address_match(
+    in_text: Optional[str] = None,
+    in_file=None,
+    in_ref=None,
+    data_state: Optional[PandasDataFrame] = None,
+    results_data_state: Optional[PandasDataFrame] = None,
+    ref_data_state: Optional[PandasDataFrame] = None,
+    in_colnames: Optional[List[str]] = None,
+    in_refcol: Optional[List[str]] = None,
+    in_joincol: Optional[List[str]] = None,
+    in_existing: Optional[List[str]] = None,
+    in_api: Optional[str] = None,
+    in_api_key: Optional[str] = None,
     use_postcode_blocker: bool = USE_POSTCODE_BLOCKER,
     run_batches_in_parallel: bool = RUN_BATCHES_IN_PARALLEL,
     max_parallel_workers: Optional[int] = MAX_PARALLEL_WORKERS,
     InitMatch: MatcherClass = InitMatch,
-    progress=gr.Progress(track_tqdm=True),
+    progress: gr.Progress = gr.Progress(track_tqdm=True),
+    search_df: Optional[PandasDataFrame] = None,
+    ref_df: Optional[PandasDataFrame] = None,
+    results_df: Optional[PandasDataFrame] = None,
 ):
     """
-    Split search and reference data into batches. Loop and run through the match script for each batch of data.
+    Run the end-to-end address matching pipeline.
+
+    This orchestrates the full workflow: load and filter the search/reference data (optionally
+    fetching reference data via an API), prepare and standardise addresses, split the work into
+    batches, run matching for each batch, and write out diagnostic/results files.
+
+    Usage:
+        Pass dataframes directly (recommended for Python use):
+            msg, output_files, est = fuzzy_address_match(
+                search_df=search_df,
+                ref_df=ref_df,
+                in_colnames=["search_addr_col1", "search_addr_col2"],
+                in_refcol=["ref_addr_col1", "ref_addr_col2"],
+            )
+
+        Or pass file paths (the function will load them):
+            msg, output_files, est = fuzzy_address_match(
+                in_file=r"C:\\path\\to\\search.csv",
+                in_ref=r"C:\\path\\to\\reference.csv",
+                in_colnames=["address"],
+                in_refcol=["full_address"],
+            )
+
+    Args:
+        in_text: Free-text address input (used when the user provides a single address string).
+        in_file: Search dataset input. May be a Gradio-uploaded file list, a single file path, or a list of file paths.
+        in_ref: Reference dataset input. May be a Gradio-uploaded file list, a single file path, or a list of file paths.
+        data_state: Search dataframe state (used by the UI pathway). Optional if `search_df` is provided.
+        results_data_state: Results dataframe state (used by the UI pathway). Optional if `results_df` is provided.
+        ref_data_state: Reference dataframe state (used by the UI pathway). Optional if `ref_df` is provided.
+        in_colnames: Column names from the search data used to construct the searchable address.
+        in_refcol: Column names from the reference data used to construct the reference address.
+        in_joincol: Column name(s) used as join/key fields between intermediate and original data.
+        in_existing: Column name(s) for any existing identifiers/fields to preserve through matching.
+        in_api: API mode / query type. If falsy, the reference data is loaded from `in_ref`.
+        in_api_key: API key used when `in_api` is provided.
+        use_postcode_blocker: If True, apply postcode-based blocking to reduce candidate comparisons.
+        run_batches_in_parallel: If True, process batches concurrently using multiple workers.
+        max_parallel_workers: Maximum number of parallel workers (only used when parallel batching is enabled).
+        InitMatch: Matcher object (or class instance) that carries configuration and intermediate state.
+        progress: Gradio progress reporter used to update UI progress.
+        search_df: Direct search dataframe input (Python-function pathway).
+        ref_df: Direct reference dataframe input (Python-function pathway).
+        results_df: Optional existing results dataframe (Python-function pathway).
+
+    Returns:
+        A tuple of:
+        - out_message: Status message (string) when there is nothing to match; otherwise the matcher's output message.
+        - output_files: List of output file paths produced during the run.
+        - estimate_total_processing_time: Estimated total processing time in seconds.
     """
+
+    class _FilePathLike:
+        def __init__(self, name: str):
+            self.name = name
+
+    def _as_file_list(value):
+        """
+        Normalise a file input into the list-of-objects-with-.name convention used by the Gradio codepath.
+
+        Accepts:
+        - None / "" -> []
+        - "C:/path/file.csv" -> [_FilePathLike(...)]
+        - ["a.csv", "b.csv"] -> [_FilePathLike(...), _FilePathLike(...)]
+        - already-file-like objects (with .name) -> returned unchanged
+        """
+        if value is None or value == "":
+            return []
+        if isinstance(value, str):
+            return [_FilePathLike(value)]
+        if isinstance(value, list):
+            if not value:
+                return []
+            if all(isinstance(v, str) for v in value):
+                return [_FilePathLike(v) for v in value]
+            return value
+        return [_FilePathLike(str(value))]
+
+    def _notify_ui(level: str, message: str) -> None:
+        """
+        Best-effort UI notification for Gradio, while still being usable from pure Python.
+        """
+        fn = getattr(gr, level, None)
+        if callable(fn):
+            try:
+                fn(message)
+            except Exception:
+                # Never let UI notifications break the pipeline.
+                pass
+        print(message)
+
     output_files = []
 
     estimate_total_processing_time = 0.0
 
     overall_tic = time.perf_counter()
 
+    # ----- Input normalisation (Python-function + UI) -----
+    # If the caller provided direct dataframes, prefer those.
+    if search_df is not None:
+        data_state = search_df
+    if ref_df is not None:
+        ref_data_state = ref_df
+    if results_df is not None:
+        results_data_state = results_df
+
+    # Ensure all dataframe-state inputs are real DataFrames for downstream `.empty` checks.
+    if data_state is None:
+        data_state = pd.DataFrame()
+    if results_data_state is None:
+        results_data_state = pd.DataFrame()
+    if ref_data_state is None:
+        ref_data_state = pd.DataFrame()
+
+    # Ensure lists are always lists (avoids mutable default args and None handling).
+    in_colnames = in_colnames or []
+    in_refcol = in_refcol or []
+    in_joincol = in_joincol or []
+    in_existing = in_existing or []
+
+    # Normalise file inputs (paths or Gradio uploads) into list-of-file-like objects.
+    in_file = _as_file_list(in_file)
+    in_ref = _as_file_list(in_ref)
+
+    # ----- Guards: ensure we have enough inputs to run -----
+    has_search_input = (
+        bool(in_text)
+        or (data_state is not None and not data_state.empty)
+        or bool(in_file)
+    )
+    if not has_search_input:
+        out_message = "No search data provided. Please upload an input file or enter a single address as text."
+        _notify_ui("Warning", out_message)
+        return out_message, None, estimate_total_processing_time, ""
+
+    has_ref_input = (ref_data_state is not None and not ref_data_state.empty) or bool(
+        in_ref
+    )
+    if not has_ref_input and not in_api:
+        out_message = "No reference data provided. Please upload a reference file, or choose an API option."
+        _notify_ui("Warning", out_message)
+        return out_message, None, estimate_total_processing_time, ""
+
+    # If matching against a reference file (not API), the user must specify at least one
+    # column that makes up the reference address; otherwise later outputs/diagnostics
+    # can fail due to missing match fields.
+    if (not in_api) and has_ref_input and (len(in_refcol) == 0):
+        out_message = (
+            "No reference address columns selected.\n\n"
+            "Please select at least one column that makes up the reference address "
+            "(and put postcode last if you include it), then try again."
+        )
+        _notify_ui("Warning", out_message)
+        return out_message, None, estimate_total_processing_time, ""
+
+    # If using file/dataframe search input (not single-text mode), require at least one
+    # search address column to build the searchable address.
+    if (not in_text or str(in_text).strip() == "") and (len(in_colnames) == 0):
+        out_message = (
+            "No search address columns selected.\n\n"
+            "Please select at least one search address column (or enter a single address as text), "
+            "then try again."
+        )
+        _notify_ui("Warning", out_message)
+        return out_message, None, estimate_total_processing_time, ""
+
+    # If the caller is using the "pure python" dataframe pathway and didn't supply any file inputs,
+    # give `load_ref_data` something to name the reference dataset with when `ref_data_state` is non-empty.
+    if ref_data_state is not None and not ref_data_state.empty and not in_ref:
+        in_ref = [_FilePathLike("in_memory_reference")]
+
     # Load in initial data. This will filter to relevant addresses in the search and reference datasets that can potentially be matched, and will pull in API data if asked for.
     InitMatch, final_api_output_file_name = load_matcher_data(
-        in_text,
+        in_text or "",
         in_file,
         in_ref,
         data_state,
@@ -1422,7 +1600,7 @@ def run_matcher(
         output_files.extend(
             [InitMatch.results_orig_df_name, InitMatch.match_outputs_name]
         )
-        return out_message, output_files, estimate_total_processing_time
+        return out_message, output_files, estimate_total_processing_time, ""
 
     # Run initial address preparation and standardisation processes
     # Prepare address format
@@ -1671,82 +1849,153 @@ def run_matcher(
         by=["index", "Matched with reference address"], ascending=[True, False]
     ).drop_duplicates(subset="index")
 
-    # Ensure diagnostics contains exclusion info for all rows present,
-    # and include explicit rows for pre-existing matches.
+    # Ensure diagnostics contains exclusion info and a row for every input record
+    # represented in results_on_orig_df.
     if ("Excluded from search" in OutputMatch.results_on_orig_df.columns) and (
         OutputMatch.search_df_key_field in OutputMatch.results_on_orig_df.columns
     ):
-        if "Excluded from search" not in OutputMatch.match_results_output.columns:
-            # Ensure merge key dtypes match (can differ between pipelines)
-            OutputMatch.match_results_output[OutputMatch.search_df_key_field] = (
-                OutputMatch.match_results_output[
-                    OutputMatch.search_df_key_field
-                ].astype(str)
-            )
-            results_keyed = OutputMatch.results_on_orig_df[
-                [OutputMatch.search_df_key_field, "Excluded from search"]
-            ].drop_duplicates(subset=OutputMatch.search_df_key_field)
-            results_keyed[OutputMatch.search_df_key_field] = results_keyed[
-                OutputMatch.search_df_key_field
-            ].astype(str)
+        diag_df = OutputMatch.match_results_output.copy()
+        key_col = OutputMatch.search_df_key_field
 
-            OutputMatch.match_results_output = OutputMatch.match_results_output.merge(
-                results_keyed,
-                on=OutputMatch.search_df_key_field,
-                how="left",
-            )
+        # Build canonical key/address lookup from results (one row per key).
+        results_cols = [key_col, "Excluded from search"]
+        if "Search data address" in OutputMatch.results_on_orig_df.columns:
+            results_cols.append("Search data address")
+        if "Matched with reference address" in OutputMatch.results_on_orig_df.columns:
+            results_cols.append("Matched with reference address")
+        results_keyed = OutputMatch.results_on_orig_df[results_cols].drop_duplicates(
+            subset=key_col, keep="first"
+        )
+        results_keyed["__key_str"] = results_keyed[key_col].astype(str)
 
-        pre_existing_rows = OutputMatch.results_on_orig_df[
-            OutputMatch.results_on_orig_df["Excluded from search"]
-            .fillna("")
-            .astype(str)
-            .eq("Previously matched")
+        # Ensure diagnostics has a key for mapping/filling.
+        if key_col not in diag_df.columns:
+            diag_df[key_col] = pd.Series(dtype="string")
+        diag_df["__key_str"] = diag_df[key_col].astype(str)
+        # Ensure diagnostics has the exclusion column so it can be populated even when
+        # the underlying diagnostic output doesn't include it by default.
+        if "Excluded from search" not in diag_df.columns:
+            diag_df["Excluded from search"] = ""
+
+        # If address->key mapping is unambiguous, correct any mis-keyed diagnostics rows.
+        if ("search_orig_address" in diag_df.columns) and (
+            "Search data address" in results_keyed.columns
+        ):
+            _addr = results_keyed["Search data address"].fillna("").astype(str)
+            _addr_counts = _addr.value_counts()
+            _unique_addrs = _addr_counts[_addr_counts == 1].index
+            _addr_to_key = (
+                results_keyed.loc[_addr.isin(_unique_addrs)]
+                .drop_duplicates(subset=["Search data address"], keep="first")
+                .set_index("Search data address")["__key_str"]
+            )
+            _mapped_key = (
+                diag_df["search_orig_address"].fillna("").astype(str).map(_addr_to_key)
+            )
+            diag_df.loc[_mapped_key.notna(), "__key_str"] = _mapped_key[
+                _mapped_key.notna()
+            ]
+
+        # Add placeholder rows for any keys missing from diagnostics.
+        missing_rows = results_keyed.loc[
+            ~results_keyed["__key_str"].isin(diag_df["__key_str"].tolist())
         ].copy()
+        if not missing_rows.empty:
+            diag_add = pd.DataFrame(columns=list(diag_df.columns))
+            diag_add["__key_str"] = missing_rows["__key_str"]
+            diag_add[key_col] = missing_rows[key_col]
 
-        if not pre_existing_rows.empty:
-            diag_cols = list(OutputMatch.match_results_output.columns)
-            diag_add = pd.DataFrame(columns=diag_cols)
-            diag_add[OutputMatch.search_df_key_field] = pre_existing_rows[
-                OutputMatch.search_df_key_field
-            ].astype(str)
-
-            if "Search data address" in pre_existing_rows.columns:
-                diag_add["Search data address"] = pre_existing_rows[
-                    "Search data address"
-                ]
-            if (
-                "search_orig_address" in diag_add.columns
-                and "Search data address" in diag_add.columns
+            if ("search_orig_address" in diag_add.columns) and (
+                "Search data address" in missing_rows.columns
             ):
-                diag_add["search_orig_address"] = diag_add["Search data address"]
-
-            if "match_method" in diag_add.columns:
-                diag_add["match_method"] = "Pre-existing match"
+                diag_add["search_orig_address"] = missing_rows["Search data address"]
             if "Excluded from search" in diag_add.columns:
-                diag_add["Excluded from search"] = "Previously matched"
+                diag_add["Excluded from search"] = missing_rows["Excluded from search"]
+            if ("full_match" in diag_add.columns) and (
+                "Matched with reference address" in missing_rows.columns
+            ):
+                diag_add["full_match"] = (
+                    missing_rows["Matched with reference address"]
+                    .fillna(False)
+                    .astype(bool)
+                )
             if "fuzzy_score" in diag_add.columns:
                 diag_add["fuzzy_score"] = 0.0
             if "wratio_score" in diag_add.columns:
                 diag_add["wratio_score"] = 0.0
-            if "full_match" in diag_add.columns:
-                diag_add["full_match"] = False
             if "standardised_address" in diag_add.columns:
                 diag_add["standardised_address"] = False
-
-            OutputMatch.match_results_output = pd.concat(
-                [OutputMatch.match_results_output, diag_add], axis=0, ignore_index=True
-            )
-            # Prefer real match rows over the placeholder "Pre-existing match" row
-            if "match_method" in OutputMatch.match_results_output.columns:
-                OutputMatch.match_results_output = (
-                    OutputMatch.match_results_output.sort_values(
-                        by=[OutputMatch.search_df_key_field, "match_method"],
-                        ascending=[True, True],
-                        kind="stable",
-                    ).drop_duplicates(
-                        subset=OutputMatch.search_df_key_field, keep="first"
-                    )
+            if "match_method" in diag_add.columns:
+                excluded_reason = (
+                    missing_rows["Excluded from search"].fillna("").astype(str)
                 )
+                diag_add["match_method"] = np.where(
+                    excluded_reason.eq("Previously matched"),
+                    "Pre-existing match",
+                    np.where(
+                        excluded_reason.eq("Included in search"),
+                        "No successful match",
+                        "Excluded from matching",
+                    ),
+                )
+
+            diag_df = pd.concat([diag_df, diag_add], axis=0, ignore_index=True)
+
+        # Canonicalise key/address/exclusion from results so diagnostics aligns exactly.
+        _exclusion_map = results_keyed.set_index("__key_str")["Excluded from search"]
+        if "Excluded from search" in diag_df.columns:
+            diag_df["Excluded from search"] = (
+                diag_df["__key_str"]
+                .map(_exclusion_map)
+                .fillna(diag_df["Excluded from search"])
+            )
+        if ("search_orig_address" in diag_df.columns) and (
+            "Search data address" in results_keyed.columns
+        ):
+            _addr_map = results_keyed.set_index("__key_str")["Search data address"]
+            diag_df["search_orig_address"] = (
+                diag_df["__key_str"]
+                .map(_addr_map)
+                .fillna(diag_df["search_orig_address"])
+            )
+        if ("full_match" in diag_df.columns) and (
+            "Matched with reference address" in results_keyed.columns
+        ):
+            _matched_map = results_keyed.set_index("__key_str")[
+                "Matched with reference address"
+            ]
+            diag_df["full_match"] = (
+                diag_df["__key_str"].map(_matched_map).fillna(diag_df["full_match"])
+            )
+        _key_map = results_keyed.set_index("__key_str")[key_col]
+        diag_df[key_col] = diag_df["__key_str"].map(_key_map).fillna(diag_df[key_col])
+
+        # One row per key in diagnostics; prefer successful/high-score rows.
+        if "fuzzy_score" in diag_df.columns:
+            diag_df["fuzzy_score"] = pd.to_numeric(
+                diag_df["fuzzy_score"], errors="coerce"
+            )
+        if "wratio_score" in diag_df.columns:
+            diag_df["wratio_score"] = pd.to_numeric(
+                diag_df["wratio_score"], errors="coerce"
+            )
+        _sort_cols = ["__key_str"]
+        _ascending = [True]
+        if "full_match" in diag_df.columns:
+            _sort_cols.append("full_match")
+            _ascending.append(False)
+        if "fuzzy_score" in diag_df.columns:
+            _sort_cols.append("fuzzy_score")
+            _ascending.append(False)
+        if "wratio_score" in diag_df.columns:
+            _sort_cols.append("wratio_score")
+            _ascending.append(False)
+        diag_df = diag_df.sort_values(
+            by=_sort_cols, ascending=_ascending, kind="stable"
+        ).drop_duplicates(subset="__key_str", keep="first")
+        diag_df = diag_df.drop(columns=["__key_str"], errors="ignore")
+
+        OutputMatch.match_results_output = diag_df
 
     overall_toc = time.perf_counter()
     time_out = (
@@ -1894,6 +2143,9 @@ def run_matcher(
             summary_table_name,
         ]
     )
+
+    print("Final matching summary:", final_summary)
+    print("Summary table:", summary_table_md)
 
     return final_summary, output_files, estimate_total_processing_time, summary_table_md
 

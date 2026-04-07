@@ -44,7 +44,7 @@ dependencies = [
     "pyap<=0.3.1",
     "pyarrow<=23.0.1",
     "openpyxl<=3.1.5",
-    "gradio==6.10.0",
+    "gradio==6.11.0",
     "boto3<=1.42.80",
     "polars<=1.39.3",
     "numpy<=2.4.3",
@@ -95,4 +95,8 @@ addopts = [
     "--tb=short",
     "--strict-markers",
     "--disable-warnings",
+]
+markers = [
+    "smoke: fast validation tests for dev branch CI",
+    "integration: end-to-end tests for main branch CI",
 ]

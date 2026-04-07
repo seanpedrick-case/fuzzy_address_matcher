@@ -613,12 +613,18 @@ def check_matches_against_fuzzy(match_results, scoresSBM, search_df_key_field):
         "fuzz_reference_orig_address",
     ]
 
+    # UPRN is optional: it may not exist in the ref data / outputs for fuzzy matching.
+    first_cols_present = [
+        col for col in first_cols if col in scoresSBM_m_model_add_matches.columns
+    ]
     last_cols = [
-        col for col in scoresSBM_m_model_add_matches.columns if col not in first_cols
+        col
+        for col in scoresSBM_m_model_add_matches.columns
+        if col not in first_cols_present
     ]
 
     scoresSBM_m_model_add_matches = scoresSBM_m_model_add_matches[
-        first_cols + last_cols
+        first_cols_present + last_cols
     ].drop(
         [
             "fuzz_search_mod_address",
@@ -645,7 +651,7 @@ def check_matches_against_fuzzy(match_results, scoresSBM, search_df_key_field):
         )
 
         scoresSBM_t_model_failed = scoresSBM_t_model_failed[
-            first_cols + last_cols
+            first_cols_present + last_cols
         ].drop(
             [
                 "fuzz_search_mod_address",

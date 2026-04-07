@@ -170,7 +170,7 @@ async def get_connection_params(request: gr.Request):
         # print("Query parameters:", dict(request.query_params))
         # To get the underlying FastAPI items you would need to use await and some fancy @ stuff for a live query: https://fastapi.tiangolo.com/vi/reference/request/
         # print("Request dictionary to object:", request.request.body())
-        print("Session hash:", request.session_hash)
+        # print("Session hash:", request.session_hash)
 
         # Retrieving or setting CUSTOM_CLOUDFRONT_HEADER
         CUSTOM_CLOUDFRONT_HEADER_var = get_or_create_env_var(
