@@ -1,4 +1,6 @@
+import ast
 import os
+import time
 import zipfile
 from typing import List, Type
 
@@ -64,6 +66,87 @@ labels_list = []
 
 ROOT_DIR = os.path.realpath(os.path.join(os.path.dirname(__file__), ".."))
 
+
+def _atomic_create_lock(lock_path: str) -> int | None:
+    """
+    Attempt to create a lock file atomically.
+    Returns a file descriptor if lock acquired, otherwise None.
+    """
+    try:
+        return os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_RDWR)
+    except FileExistsError:
+        return None
+
+
+def _ensure_model_assets_extracted(model_zip_path: str, extract_dir: str) -> None:
+    """
+    Ensure model assets are extracted exactly-once across processes.
+
+    This module is imported by multiprocessing spawned workers on Windows.
+    Without a lock, concurrent `extractall()` calls can leave partially-written
+    files that later fail to parse (e.g. SyntaxError when reading word_to_index).
+    """
+    os.makedirs(extract_dir, exist_ok=True)
+
+    done_marker = os.path.join(extract_dir, ".model_extract.done")
+    lock_path = os.path.join(extract_dir, ".model_extract.lock")
+
+    # If we've already extracted successfully, nothing to do.
+    if os.path.exists(done_marker):
+        return
+
+    # Fast path: if the expected files exist and are non-empty, mark as done.
+    expected = [
+        os.path.join(extract_dir, "vocab.txt"),
+        os.path.join(extract_dir, "word_to_index.txt"),
+        os.path.join(extract_dir, "cat_to_idx.txt"),
+    ]
+    if all(os.path.exists(p) and os.path.getsize(p) > 0 for p in expected):
+        with open(done_marker, "w", encoding="utf-8") as f:
+            f.write("ok\n")
+        return
+
+    # Acquire lock (spin with backoff) to avoid parallel extraction.
+    fd = None
+    for _ in range(60):  # up to ~30s
+        fd = _atomic_create_lock(lock_path)
+        if fd is not None:
+            break
+        # Another process is extracting; wait a bit and re-check.
+        if os.path.exists(done_marker):
+            return
+        time.sleep(0.5)
+
+    # If lock wasn't acquired, proceed without extraction but let caller fail loudly.
+    if fd is None:
+        return
+
+    try:
+        with zipfile.ZipFile(model_zip_path, "r") as zip_ref:
+            zip_ref.extractall(extract_dir)
+
+        # Create marker only after successful extraction.
+        with open(done_marker, "w", encoding="utf-8") as f:
+            f.write("ok\n")
+    finally:
+        try:
+            os.close(fd)
+        finally:
+            # Best-effort cleanup. If deletion fails, marker still prevents work.
+            try:
+                os.remove(lock_path)
+            except OSError:
+                pass
+
+
+def _read_literal(path: str):
+    with open(path, "r", encoding="utf-8") as f:
+        content = f.read().strip()
+    if not content:
+        raise ValueError(f"File is empty: {path}")
+    return ast.literal_eval(content)
+
+
 # If using default relative output/, extract model next to project root; otherwise next to output path.
 if MODEL_EXTRACT_USE_PROJECT_ROOT:
     out_model_dir = ROOT_DIR
@@ -104,8 +187,7 @@ if USE_NNET_MODEL:
             os.environ["CUDA_VISIBLE_DEVICES"] = MATCHER_CUDA_VISIBLE_DEVICES
             device = "cpu"
 
-            with zipfile.ZipFile(model_path, "r") as zip_ref:
-                zip_ref.extractall(out_model_dir)
+            _ensure_model_assets_extracted(model_path, out_model_dir)
 
             if "pytorch" in model_stub:
 
@@ -133,12 +215,13 @@ if USE_NNET_MODEL:
                     | (model_type == "lstm")
                 ):
                     # Load vocab and word_to_index
-                    with open(out_model_dir + "/vocab.txt", "r") as f:
-                        vocab = eval(f.read())
-                    with open(out_model_dir + "/word_to_index.txt", "r") as f:
-                        word_to_index = eval(f.read())
-                    with open(out_model_dir + "/cat_to_idx.txt", "r") as f:
-                        cat_to_idx = eval(f.read())
+                    vocab = _read_literal(os.path.join(out_model_dir, "vocab.txt"))
+                    word_to_index = _read_literal(
+                        os.path.join(out_model_dir, "word_to_index.txt")
+                    )
+                    cat_to_idx = _read_literal(
+                        os.path.join(out_model_dir, "cat_to_idx.txt")
+                    )
 
                     VOCAB_SIZE = len(word_to_index)
                     OUTPUT_DIM = len(cat_to_idx) + 1  # Number of classes/categories

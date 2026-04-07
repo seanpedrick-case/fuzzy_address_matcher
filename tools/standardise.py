@@ -289,15 +289,16 @@ def move_flat_house_court(df: PandasDataFrame):
     # Remove the word flat or apartment from addresses that have only one number in it. 'Flat' will be re-added later to relevant addresses
     # that need it (replace_floor_flat)
     df["flat_removed"] = remove_flat_one_number_address(df, "add_no_pcode")
+    flat_removed_lower = df["flat_removed"].str.lower()
 
-    remove_flat_house = (
-        df["flat_removed"].str.lower().str.contains(r"\bhouse\b")
+    remove_flat_house = flat_removed_lower.str.contains(
+        r"\bhouse\b"
     )  # (?=\bhouse\b)(?!.*house road)")
-    remove_flat_court = (
-        df["flat_removed"].str.lower().str.contains(r"\bcourt\b")
+    remove_flat_court = flat_removed_lower.str.contains(
+        r"\bcourt\b"
     )  # (?=\bcourt\b)(?!.*court road)")
-    remove_flat_terrace = (
-        df["flat_removed"].str.lower().str.contains(r"\bterrace\b")
+    remove_flat_terrace = flat_removed_lower.str.contains(
+        r"\bterrace\b"
     )  # (?=\bterrace\b)(?!.*terrace road)")
     remove_flat_house_or_court = (
         remove_flat_house | remove_flat_court | remove_flat_terrace == 1
@@ -472,26 +473,25 @@ def remove_flat_one_number_address(
     If there is only one number in the address, and there is no letter after the number,
     remove the word flat from the address
     """
+    col_lower = df[col1].str.lower()
 
-    df["contains_letter_after_number"] = (
-        df[col1].str.lower().str.contains(r"\d+(?:[a-z]|[A-Z])(?!.*\d+)", regex=True)
+    df["contains_letter_after_number"] = col_lower.str.contains(
+        r"\d+(?:[a-z]|[A-Z])(?!.*\d+)", regex=True
     )
-    df["contains_single_letter_before_number"] = (
-        df[col1].str.lower().str.contains(r"\b[A-Za-z]\b[^\d]* \d", regex=True)
+    df["contains_single_letter_before_number"] = col_lower.str.contains(
+        r"\b[A-Za-z]\b[^\d]* \d", regex=True
     )
-    df["two_numbers_in_address"] = (
-        df[col1].str.lower().str.contains(r"(?:\d+.*?)[^a-zA-Z0-9_].*?\d+", regex=True)
+    df["two_numbers_in_address"] = col_lower.str.contains(
+        r"(?:\d+.*?)[^a-zA-Z0-9_].*?\d+", regex=True
     )
-    df["contains_apartment"] = (
-        df[col1]
-        .str.lower()
-        .str.contains(r"\bapartment\b \w+|\bapartments\b \w+", "", regex=True)
+    df["contains_apartment"] = col_lower.str.contains(
+        r"\bapartment\b \w+|\bapartments\b \w+", "", regex=True
     )
-    df["contains_flat"] = (
-        df[col1].str.lower().str.contains(r"\bflat\b \w+|\bflats\b \w+", "", regex=True)
+    df["contains_flat"] = col_lower.str.contains(
+        r"\bflat\b \w+|\bflats\b \w+", "", regex=True
     )
-    df["contains_room"] = (
-        df[col1].str.lower().str.contains(r"\broom\b \w+|\brooms\b \w+", "", regex=True)
+    df["contains_room"] = col_lower.str.contains(
+        r"\broom\b \w+|\brooms\b \w+", "", regex=True
     )
 
     df["selected_rows"] = (
@@ -548,22 +548,19 @@ def extract_letter_one_number_address(
 
 
     """
+    col_lower = df[col1].str.lower()
 
-    df["contains_no_numbers_without_letter"] = (
-        df[col1].str.lower().str.contains(r"^(?:(?!\d+ ).)*$")
+    df["contains_no_numbers_without_letter"] = col_lower.str.contains(
+        r"^(?:(?!\d+ ).)*$"
     )
-    df["contains_letter_after_number"] = (
-        df[col1].str.lower().str.contains(r"\d+(?:[a-z]|[A-Z])(?!.*\d+)")
+    df["contains_letter_after_number"] = col_lower.str.contains(
+        r"\d+(?:[a-z]|[A-Z])(?!.*\d+)"
     )
-    df["contains_apartment"] = (
-        df[col1].str.lower().str.contains(r"\bapartment\b \w+|\bapartments\b \w+", "")
+    df["contains_apartment"] = col_lower.str.contains(
+        r"\bapartment\b \w+|\bapartments\b \w+", ""
     )
-    df["contains_flat"] = (
-        df[col1].str.lower().str.contains(r"\bflat\b \w+|\bflats\b \w+", "")
-    )
-    df["contains_room"] = (
-        df[col1].str.lower().str.contains(r"\broom\b \w+|\brooms\b \w+", "")
-    )
+    df["contains_flat"] = col_lower.str.contains(r"\bflat\b \w+|\bflats\b \w+", "")
+    df["contains_room"] = col_lower.str.contains(r"\broom\b \w+|\brooms\b \w+", "")
 
     df["selected_rows"] = (
         (df["contains_no_numbers_without_letter"])
@@ -573,22 +570,20 @@ def extract_letter_one_number_address(
         & (~df["contains_room"])
     )
 
-    df["extract_letter"] = df[(df["selected_rows"])][col1].str.extract(
-        r"\d+([a-z]|[A-Z])"
-    )
+    selected_rows = df["selected_rows"]
+    selected_col = df.loc[selected_rows, col1]
 
-    df["extract_number"] = df[(df["selected_rows"])][col1].str.extract(
-        r"(\d+)[a-z]|[A-Z]"
-    )
+    df["extract_letter"] = selected_col.str.extract(r"\d+([a-z]|[A-Z])")
+
+    df["extract_number"] = selected_col.str.extract(r"(\d+)[a-z]|[A-Z]")
 
     df["letter_after_number"] = (
         "flat "
-        + df[(df["selected_rows"])]["extract_letter"]
+        + df.loc[selected_rows, "extract_letter"]
         + " "
-        + df[(df["selected_rows"])]["extract_number"]
+        + df.loc[selected_rows, "extract_number"]
         + " "
-        + df[(df["selected_rows"])][col1]
-        .str.replace(r"\bflat\b", "", regex=True)
+        + selected_col.str.replace(r"\bflat\b", "", regex=True)
         .str.replace(r"\d+([a-z]|[A-Z])", "", regex=True)
         .map(str)
     )
@@ -628,33 +623,34 @@ def replace_floor_flat(df: PandasDataFrame, col1: PandasSeries) -> PandasSeries:
     """
 
     df["letter_after_number"] = extract_letter_one_number_address(df, col1)
+    col_lower = df[col1].str.lower()
 
-    df["basement"] = "flat basement" + df[
-        df[col1].str.lower().str.contains(r"basement")
-    ][col1].str.replace(r"\bflat\b", "", regex=True).str.replace(
+    df["basement"] = "flat basement" + df[col_lower.str.contains(r"basement")][
+        col1
+    ].str.replace(r"\bflat\b", "", regex=True).str.replace(
         r"\bbasement\b", "", regex=True
     ).map(
         str
     )
 
-    df["ground_floor"] = "flat a " + df[
-        df[col1].str.lower().str.contains(r"\bground floor\b")
-    ][col1].str.replace(r"\bflat\b", "", regex=True).str.replace(
+    df["ground_floor"] = "flat a " + df[col_lower.str.contains(r"\bground floor\b")][
+        col1
+    ].str.replace(r"\bflat\b", "", regex=True).str.replace(
         r"\bground floor\b", "", regex=True
     ).map(
         str
     )
 
-    df["first_floor"] = "flat b " + df[
-        df[col1].str.lower().str.contains(r"\bfirst floor\b")
-    ][col1].str.replace(r"\bflat\b", "", regex=True).str.replace(
+    df["first_floor"] = "flat b " + df[col_lower.str.contains(r"\bfirst floor\b")][
+        col1
+    ].str.replace(r"\bflat\b", "", regex=True).str.replace(
         r"\bfirst floor\b", "", regex=True
     ).map(
         str
     )
 
     df["ground_and_first_floor"] = "flat ab " + df[
-        df[col1].str.lower().str.contains(r"\bground and first floor\b")
+        col_lower.str.contains(r"\bground and first floor\b")
     ][col1].str.replace(r"\bflat\b", "", regex=True).str.replace(
         r"\bground and first floor\b", "", regex=True
     ).map(
@@ -662,7 +658,7 @@ def replace_floor_flat(df: PandasDataFrame, col1: PandasSeries) -> PandasSeries:
     )
 
     df["basement_ground_and_first_floor"] = "flat basementab " + df[
-        df[col1].str.lower().str.contains(r"\bbasement ground and first floors\b")
+        col_lower.str.contains(r"\bbasement ground and first floors\b")
     ][col1].str.replace(r"\bflat\b", "", regex=True).str.replace(
         r"\bbasement and ground and first floors\b", "", regex=True
     ).map(
@@ -670,72 +666,72 @@ def replace_floor_flat(df: PandasDataFrame, col1: PandasSeries) -> PandasSeries:
     )
 
     df["basement_ground_and_first_floor2"] = "flat basementab " + df[
-        df[col1].str.lower().str.contains(r"\bbasement ground and first floors\b")
+        col_lower.str.contains(r"\bbasement ground and first floors\b")
     ][col1].str.replace(r"\bflat\b", "", regex=True).str.replace(
         r"\bbasement ground and first floors\b", "", regex=True
     ).map(
         str
     )
 
-    df["second_floor"] = "flat c " + df[
-        df[col1].str.lower().str.contains(r"\bsecond floor\b")
-    ][col1].str.replace(r"\bflat\b", "", regex=True).str.replace(
+    df["second_floor"] = "flat c " + df[col_lower.str.contains(r"\bsecond floor\b")][
+        col1
+    ].str.replace(r"\bflat\b", "", regex=True).str.replace(
         r"\bsecond floor\b", "", regex=True
     ).map(
         str
     )
 
     df["first_and_second_floor"] = "flat bc " + df[
-        df[col1].str.lower().str.contains(r"\bfirst and second floor\b")
+        col_lower.str.contains(r"\bfirst and second floor\b")
     ][col1].str.replace(r"\bflat\b", "", regex=True).str.replace(
         r"\bfirst and second floor\b", "", regex=True
     ).map(
         str
     )
 
-    df["first1_floor"] = "flat b " + df[
-        df[col1].str.lower().str.contains(r"\b1st floor\b")
-    ][col1].str.replace(r"\bflat\b", "", regex=True).str.replace(
+    df["first1_floor"] = "flat b " + df[col_lower.str.contains(r"\b1st floor\b")][
+        col1
+    ].str.replace(r"\bflat\b", "", regex=True).str.replace(
         r"\b1st floor\b", "", regex=True
     ).map(
         str
     )
 
-    df["second2_floor"] = "flat c " + df[
-        df[col1].str.lower().str.contains(r"\b2nd floor\b")
-    ][col1].str.replace(r"\bflat\b", "", regex=True).str.replace(
+    df["second2_floor"] = "flat c " + df[col_lower.str.contains(r"\b2nd floor\b")][
+        col1
+    ].str.replace(r"\bflat\b", "", regex=True).str.replace(
         r"\b2nd floor\b", "", regex=True
     ).map(
         str
     )
 
     df["ground_first_second_floor"] = "flat abc " + df[
-        df[col1].str.lower().str.contains(r"\bground and first and second floor\b")
+        col_lower.str.contains(r"\bground and first and second floor\b")
     ][col1].str.replace(r"\bflat\b", "", regex=True).str.replace(
         r"\bground and first and second floor\b", "", regex=True
     ).map(
         str
     )
 
-    df["third_floor"] = "flat d " + df[
-        df[col1].str.lower().str.contains(r"\bthird floor\b")
-    ][col1].str.replace(r"\bflat\b", "", regex=True).str.replace(
+    df["third_floor"] = "flat d " + df[col_lower.str.contains(r"\bthird floor\b")][
+        col1
+    ].str.replace(r"\bflat\b", "", regex=True).str.replace(
         r"\bthird floor\b", "", regex=True
     ).map(
         str
     )
 
-    df["third3_floor"] = "flat d " + df[
-        df[col1].str.lower().str.contains(r"\b3rd floor\b")
-    ][col1].str.replace(r"\bflat\b", "", regex=True).str.replace(
+    df["third3_floor"] = "flat d " + df[col_lower.str.contains(r"\b3rd floor\b")][
+        col1
+    ].str.replace(r"\bflat\b", "", regex=True).str.replace(
         r"\b3rd floor\b", "", regex=True
     ).map(
         str
     )
 
-    df["top_floor"] = "flat top " + df[
-        df[col1].str.lower().str.contains(r"\btop floor\b")
-    ][col1].str.replace(r"\bflat\b", "", regex=True).str.replace(
+    df["top_floor"] = "flat top " + df[col_lower.str.contains(r"\btop floor\b")][
+        col1
+    ].str.replace(r"\bflat\b", "", regex=True).str.replace(
         r"\btop floor\b", "", regex=True
     ).map(
         str
@@ -797,13 +793,14 @@ def remove_non_housing(df: PandasDataFrame, col1: PandasSeries) -> PandasDataFra
     the text 'parking', 'garage', 'store', 'visitor bay', 'visitors room', and 'bike rack',
     'yard', 'workshop'
     """
-    df_copy = df.copy()[
+    mask = (
         ~df[col1]
         .str.lower()
         .str.contains(
             r"parking|garage|\bstore\b|\bstores\b|\bvisitor bay\b|visitors room|\bbike rack\b|\byard\b|\bworkshop\b"
         )
-    ]
+    )
+    df_copy = df.loc[mask].copy()
 
     return df_copy
 

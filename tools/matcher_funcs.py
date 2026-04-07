@@ -1545,7 +1545,12 @@ def fuzzy_address_match(
     # If matching against a reference file (not API), the user must specify at least one
     # column that makes up the reference address; otherwise later outputs/diagnostics
     # can fail due to missing match fields.
-    if (not in_api) and has_ref_input and (len(in_refcol) == 0):
+    if (
+        (not in_api)
+        and has_ref_input
+        and (len(in_refcol) == 0)
+        and not any("sao" in col.lower() for col in ref_data_state.columns)
+    ):
         out_message = (
             "No reference address columns selected.\n\n"
             "Please select at least one column that makes up the reference address "
@@ -1553,6 +1558,9 @@ def fuzzy_address_match(
         )
         _notify_ui("Warning", out_message)
         return out_message, None, estimate_total_processing_time, ""
+
+    if any("sao" in col.lower() for col in ref_data_state.columns):
+        print("Addressbase format found in reference data")
 
     # If using file/dataframe search input (not single-text mode), require at least one
     # search address column to build the searchable address.
@@ -1712,7 +1720,29 @@ def fuzzy_address_match(
             batch_size,
         )
 
-    print("Batches to run in this session: ", range_df)
+    try:
+        range_df_print = range_df.copy()
+        range_df_print["search_range_summary"] = range_df_print["search_range"].apply(
+            _summarise_index_list
+        )
+        range_df_print["ref_range_summary"] = range_df_print["ref_range"].apply(
+            _summarise_index_list
+        )
+        cols = [
+            c
+            for c in [
+                "search_range_summary",
+                "batch_length",
+                "ref_range_summary",
+                "ref_length",
+            ]
+            if c in range_df_print.columns
+        ]
+        print("Batches to run in this session:")
+        print(range_df_print[cols].to_string(index=True))
+    except Exception:
+        # Fallback: preserve prior behaviour if anything unexpected happens
+        print("Batches to run in this session: ", range_df)
 
     OutputMatch = copy.copy(InitMatch)
 
@@ -1844,10 +1874,33 @@ def fuzzy_address_match(
             .fillna(False)
         )
 
-    # Remove any duplicates from reference df, prioritise successful matches
-    OutputMatch.results_on_orig_df = OutputMatch.results_on_orig_df.sort_values(
-        by=["index", "Matched with reference address"], ascending=[True, False]
-    ).drop_duplicates(subset="index")
+    # Remove any duplicates, prioritise successful matches, and keep a consistent
+    # ordering across outputs (prefer numeric ordering of the key where possible).
+    _key_col = (
+        OutputMatch.search_df_key_field
+        if (
+            hasattr(OutputMatch, "search_df_key_field")
+            and isinstance(OutputMatch.search_df_key_field, str)
+            and (
+                OutputMatch.search_df_key_field
+                in OutputMatch.results_on_orig_df.columns
+            )
+        )
+        else ("index" if "index" in OutputMatch.results_on_orig_df.columns else None)
+    )
+    if _key_col is not None:
+        OutputMatch.results_on_orig_df["__key_num"] = pd.to_numeric(
+            OutputMatch.results_on_orig_df[_key_col], errors="coerce"
+        )
+        _sort_by = ["__key_num", _key_col, "Matched with reference address"]
+        _sort_asc = [True, True, False]
+        OutputMatch.results_on_orig_df = (
+            OutputMatch.results_on_orig_df.sort_values(
+                by=_sort_by, ascending=_sort_asc, kind="stable"
+            )
+            .drop_duplicates(subset=_key_col, keep="first")
+            .drop(columns=["__key_num"], errors="ignore")
+        )
 
     # Ensure diagnostics contains exclusion info and a row for every input record
     # represented in results_on_orig_df.
@@ -1979,8 +2032,14 @@ def fuzzy_address_match(
             diag_df["wratio_score"] = pd.to_numeric(
                 diag_df["wratio_score"], errors="coerce"
             )
-        _sort_cols = ["__key_str"]
-        _ascending = [True]
+        _sort_cols = []
+        _ascending = []
+        diag_df["__key_num"] = pd.to_numeric(diag_df[key_col], errors="coerce")
+        if diag_df["__key_num"].notna().any():
+            _sort_cols.append("__key_num")
+            _ascending.append(True)
+        _sort_cols.append("__key_str")
+        _ascending.append(True)
         if "full_match" in diag_df.columns:
             _sort_cols.append("full_match")
             _ascending.append(False)
@@ -1993,7 +2052,7 @@ def fuzzy_address_match(
         diag_df = diag_df.sort_values(
             by=_sort_cols, ascending=_ascending, kind="stable"
         ).drop_duplicates(subset="__key_str", keep="first")
-        diag_df = diag_df.drop(columns=["__key_str"], errors="ignore")
+        diag_df = diag_df.drop(columns=["__key_str", "__key_num"], errors="ignore")
 
         OutputMatch.match_results_output = diag_df
 
@@ -2311,7 +2370,7 @@ def create_batch_ranges(
                 len(current_batch) >= batch_size
                 or len(current_ref_batch) >= ref_batch_size
             ):
-                print("Batch length reached - breaking")
+                # print("Batch length reached - breaking")
                 break
 
             try:
@@ -2362,6 +2421,37 @@ def create_batch_ranges(
     )
 
     return lengths_df
+
+
+def _summarise_index_list(values) -> str:
+    """
+    Summarise a list/iterable of numeric indices for console display.
+
+    Examples:
+    - [] -> "∅ (n=0)"
+    - [10, 11, 12] -> "10–12 (n=3)"
+    """
+    if values is None:
+        return "∅ (n=0)"
+
+    try:
+        seq = list(values)
+    except TypeError:
+        seq = [values]
+
+    if not seq:
+        return "∅ (n=0)"
+
+    try:
+        mn = min(seq)
+        mx = max(seq)
+    except TypeError:
+        return f"{seq[0]}…{seq[-1]} (n={len(seq)})"
+
+    if mn == mx:
+        return f"{mn} (n={len(seq)})"
+
+    return f"{mn}–{mx} (n={len(seq)})"
 
 
 def run_single_match_batch(
@@ -2832,14 +2922,14 @@ def full_fuzzy_match(
         search_df_not_matched = search_df_after_stand.copy()
 
     # If nothing left to match, break
-    if (not match_results_output.empty) and (
-        (sum(~match_results_output["full_match"]) == 0)
-        | (
-            sum(
-                match_results_output[~match_results_output["full_match"]]["fuzzy_score"]
-            )
-            == 0
+    if not match_results_output.empty:
+        full_match_series = (
+            match_results_output["full_match"].fillna(False).astype(bool)
         )
+
+    if (not match_results_output.empty) and (
+        (sum(~full_match_series) == 0)
+        | (sum(match_results_output[~full_match_series]["fuzzy_score"]) == 0)
     ):
         print("Nothing left to match!")
 

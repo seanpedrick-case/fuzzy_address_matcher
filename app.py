@@ -322,7 +322,7 @@ with block:
             in_ref.render()
 
         with gr.Accordion(
-            "Reference address columns and join columns (place postcode at the end if available. If you have Addressbase API format with columns SaoText, SaoStartNumber etc. will be automatically detected)",
+            "Reference address columns and join columns (place postcode at the end if available). If you have addresses in the Addressbase API format with columns SaoText, SaoStartNumber etc., they will be automatically detected, you can click directly on Match addresses below.",
             open=True,
         ):
             in_refcol.render()
@@ -403,7 +403,7 @@ with block:
             output_summary_table_md,
         ],
         api_name="fuzzy_address_match",
-        show_progress_on=[output_summary],
+        show_progress_on=[output_file],
     ).then(
         fn=reveal_feedback_buttons,
         outputs=[
