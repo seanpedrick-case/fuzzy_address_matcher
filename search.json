@@ -1,0 +1,72 @@
+[
+  {
+    "objectID": "src/user_guide.html",
+    "href": "src/user_guide.html",
+    "title": "User guide",
+    "section": "",
+    "text": "The Fuzzy address matcher app compares your search addresses against a reference source and produces match outputs for review.\nYou can run matching in two ways:\n\nBatch mode using uploaded files (CSV, XLSX, or Parquet).\nSingle-address mode using a text input.\n\nThe app is intended for UK address workflows. Where postcodes are used, keep postcode as the last selected address component when possible."
+  },
+  {
+    "objectID": "src/user_guide.html#overview",
+    "href": "src/user_guide.html#overview",
+    "title": "User guide",
+    "section": "",
+    "text": "The Fuzzy address matcher app compares your search addresses against a reference source and produces match outputs for review.\nYou can run matching in two ways:\n\nBatch mode using uploaded files (CSV, XLSX, or Parquet).\nSingle-address mode using a text input.\n\nThe app is intended for UK address workflows. Where postcodes are used, keep postcode as the last selected address component when possible."
+  },
+  {
+    "objectID": "src/user_guide.html#before-you-start",
+    "href": "src/user_guide.html#before-you-start",
+    "title": "User guide",
+    "section": "Before you start",
+    "text": "Before you start\n\nPrepare a search dataset containing the address fields you want to match.\nDecide whether your reference source is:\n\nA reference file upload, or\nThe AddressBase API.\n\nIdentify any columns you want to keep as join columns in output.\nIf your search file already contains prior match fields, identify those columns so they can be preserved in results."
+  },
+  {
+    "objectID": "src/user_guide.html#match-workflow-in-the-app",
+    "href": "src/user_guide.html#match-workflow-in-the-app",
+    "title": "User guide",
+    "section": "Match workflow in the app",
+    "text": "Match workflow in the app\n\nUpload one or more search files in Match multiple addresses in a CSV/XLSX/Parquet file.\nChoose search address columns in Address columns in search data.\nOptionally choose Columns indicating existing address matches.\nOptionally enable Use postcode blocker.\nOptionally provide Single address input for one-off matching.\nChoose a reference route:\n\nUse Addressbase API and provide API mode/key, or\nUpload a reference file.\n\nFor reference-file matching, choose:\n\nReference address columns\nReference join columns\n\nClick Match addresses.\nReview:\n\nSummary text\nDownloadable output files\nSummary table markdown"
+  },
+  {
+    "objectID": "src/user_guide.html#input-reference-fuzzy_address_match",
+    "href": "src/user_guide.html#input-reference-fuzzy_address_match",
+    "title": "User guide",
+    "section": "Input reference (fuzzy_address_match)",
+    "text": "Input reference (fuzzy_address_match)\nThe app calls fuzzy_address_match(...) with these user-facing inputs.\n\nSearch inputs\n\nin_file: uploaded search file(s).\nin_text: optional single address text.\nin_colnames: selected search address columns.\nin_existing: optional existing match columns to preserve.\n\n\n\nReference inputs\n\nin_ref: uploaded reference file(s).\nin_refcol: selected reference address columns.\nin_joincol: reference columns to keep in output.\n\n\n\nAPI inputs\n\nin_api: API route option (for example postcode-based mode).\nin_api_key: API key used for AddressBase access.\n\n\n\nMatching behavior inputs\n\nuse_postcode_blocker: prefer postcode-based blocking when possible."
+  },
+  {
+    "objectID": "src/user_guide.html#outputs-and-how-to-interpret-them",
+    "href": "src/user_guide.html#outputs-and-how-to-interpret-them",
+    "title": "User guide",
+    "section": "Outputs and how to interpret them",
+    "text": "Outputs and how to interpret them\nThe function returns:\n\nfinal_summary: run summary text used in the app summary panel.\noutput_files: downloadable output paths shown in the app.\nestimate_total_processing_time: estimated runtime in seconds.\nsummary_table_md: markdown summary table rendered in the app.\n\n\nTypical output files\nDepending on your run, output files usually include:\n\nMain results on original search rows (joined search + match/reference fields).\nA match diagnostics output with match method and scoring details.\nA summary CSV with counts and percentages by inclusion/match status.\nAPI artifact output when API mode is used.\n\n\n\nKey result concepts\n\nExcluded from search: records skipped due to input quality or rule checks.\nMatched with reference address: whether a reference match was found.\nReference matched address: the selected reference address for matched rows.\nReference file: source reference file used for the match.\nReason for exclusion: why a record was not eligible for matching."
+  },
+  {
+    "objectID": "src/user_guide.html#guardrails-and-common-issues",
+    "href": "src/user_guide.html#guardrails-and-common-issues",
+    "title": "User guide",
+    "section": "Guardrails and common issues",
+    "text": "Guardrails and common issues\n\nIf no search input is supplied, matching does not run.\nIf neither reference file nor API is supplied, matching does not run.\nIf reference matching is used without selecting reference address columns, matching does not run.\nIf file-based search is used without selecting search address columns, matching does not run.\nIf loaded search/reference data is empty, there is nothing to match.\n\nWhen postcode blocking is enabled but usable postcodes are unavailable, the workflow can fall back to street-only blocking."
+  },
+  {
+    "objectID": "src/user_guide.html#good-practice",
+    "href": "src/user_guide.html#good-practice",
+    "title": "User guide",
+    "section": "Good practice",
+    "text": "Good practice\n\nKeep postcode as the final selected address component where applicable.\nReview unmatched and excluded records before downstream use.\nTreat results as candidate matches requiring validation rather than final truth."
+  },
+  {
+    "objectID": "index.html",
+    "href": "index.html",
+    "title": "Home",
+    "section": "",
+    "text": "Address Matcher helps you compare search addresses against a trusted reference list (or AddressBase API) and produce candidate matches for review.\nUse this guide to understand the workflow, required inputs, and output files produced by the matching process.\n\nStart with the User guide for step-by-step instructions.\nReview all match outputs before operational use, especially when records are excluded or low-confidence.\n\n\n\n\nHow to run matching from the app interface.\nHow input fields map to matching behavior.\nWhat output files are produced and how to interpret them."
+  },
+  {
+    "objectID": "index.html#what-this-documentation-covers",
+    "href": "index.html#what-this-documentation-covers",
+    "title": "Home",
+    "section": "",
+    "text": "How to run matching from the app interface.\nHow input fields map to matching behavior.\nWhat output files are produced and how to interpret them."
+  }
+]
