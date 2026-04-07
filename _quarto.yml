@@ -3,7 +3,7 @@ project:
   output-dir: docs
 
 website:
-  title: "Address Matcher"
+  title: "Fuzzy address matcher"
   page-navigation: true
   back-to-top-navigation: true
   search: true
