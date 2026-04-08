@@ -162,7 +162,9 @@ def _clean_columns(df: PandasDataFrame, cols: List[str]):
             .str.replace(r"(\b\w+\b\s+\b\w+\b)\s+\1$", r"\1", regex=True)
         )
 
-    for col in tqdm(cols, desc="Cleaning columns"):
+    for col in tqdm(
+        cols, desc="Cleaning columns", bar_format="{l_bar}{percentage:3.0f}%"
+    ):
         df[col] = clean_col(df[col])
 
     return df

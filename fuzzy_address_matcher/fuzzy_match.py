@@ -203,8 +203,8 @@ def string_match_by_post_code_multiple(
             )  # [("NA", 0)] # for _ in range(1, search_limit + 1)]
             return matched
 
-    print("Fuzzy match column length: ", len(match_address_series))
-    print("Fuzzy Reference column length: ", len(reference_address_series))
+    # print("Fuzzy match column length: ", len(match_address_series))
+    # print("Fuzzy Reference column length: ", len(reference_address_series))
 
     match_address_series = match_address_series.rename_axis("postcode_search")
     match_address_df = pd.DataFrame(match_address_series.reset_index())
@@ -627,6 +627,10 @@ def create_diagnostic_results(
         print("Existing ref_index column not found")
         ref_list_df["ref_index"] = ref_list_df.index
 
+    # Normalise postcode naming on reference side for custom schemas.
+    if "Postcode" not in ref_list_df.columns and "postcode" in ref_list_df.columns:
+        ref_list_df["Postcode"] = ref_list_df["postcode"]
+
     ref_join_cols = [
         "ref_index",
         final_ref_address_col,
@@ -639,6 +643,9 @@ def create_diagnostic_results(
         orig_ref_address_col,
         "Postcode",
     ]
+    for _c in ref_join_cols:
+        if _c not in ref_list_df.columns:
+            ref_list_df[_c] = ""
     ref_list_df = ref_list_df[ref_join_cols].rename(
         columns={
             orig_ref_address_col: "reference_orig_address",
@@ -662,6 +669,9 @@ def create_diagnostic_results(
         orig_matched_address_col,
         "postcode",
     ]
+    for _c in matched_df_cols:
+        if _c not in matched_df.columns:
+            matched_df[_c] = ""
     matched_df = matched_df[matched_df_cols].rename(
         columns={
             orig_matched_address_col: "search_orig_address",
@@ -881,6 +891,43 @@ def fill_reference_join_columns_for_previously_matched(
     return out
 
 
+def _overlay_pre_filter_address_for_display(
+    search_df: PandasDataFrame,
+    search_df_key_field: str,
+    pre_filter_search_df: Optional[PandasDataFrame],
+) -> PandasDataFrame:
+    """
+    Replace cleaned `full_address` with the raw input join (`address_cols_joined`) when available
+    so 'Search data address' matches the original search file format for every row.
+    """
+    if pre_filter_search_df is None or pre_filter_search_df.empty:
+        return search_df
+    if (
+        "address_cols_joined" not in pre_filter_search_df.columns
+        or search_df_key_field not in pre_filter_search_df.columns
+        or "full_address" not in search_df.columns
+    ):
+        return search_df
+
+    disp = pre_filter_search_df[
+        [search_df_key_field, "address_cols_joined"]
+    ].drop_duplicates(subset=[search_df_key_field], keep="first")
+    k = search_df_key_field
+    out = search_df.copy()
+    out[k] = out[k].astype(str)
+    disp = disp.copy()
+    disp[k] = disp[k].astype(str)
+    out = out.merge(disp, on=k, how="left")
+    orig = out["address_cols_joined"]
+    has_orig = (
+        orig.notna()
+        & orig.astype(str).str.strip().ne("")
+        & ~orig.astype(str).str.strip().str.lower().isin(("nan", "none", "<na>"))
+    )
+    out["full_address"] = orig.where(has_orig, out["full_address"])
+    return out.drop(columns=["address_cols_joined"], errors="ignore")
+
+
 def create_results_df(
     match_results_output: PandasDataFrame,
     search_df: PandasDataFrame,
@@ -888,11 +935,15 @@ def create_results_df(
     new_join_col: List[str],
     ref_df_cleaned: Optional[PandasDataFrame] = None,
     existing_match_col: Optional[str] = None,
+    pre_filter_search_df: Optional[PandasDataFrame] = None,
 ) -> PandasDataFrame:
     """
     Following the fuzzy match, join the match results back to the original search dataframe to create a results dataframe.
     """
     search_df = search_df.copy()
+    search_df = _overlay_pre_filter_address_for_display(
+        search_df, search_df_key_field, pre_filter_search_df
+    )
 
     # Preserve the search-side "in_existing" values even when the column name collides
     # with `new_join_col` (and thus gets renamed and later dropped).
@@ -949,7 +1000,6 @@ def create_results_df(
 
     if search_df_key_field == "index":
         # Check index is int
-        print("Search df key field is index")
         # match_results_output_success[search_df_key_field] = match_results_output_success[search_df_key_field].astype(float).astype(int)
         results_for_orig_df_join = search_df.merge(
             match_results_output_success[ref_df_after_stand_cols],

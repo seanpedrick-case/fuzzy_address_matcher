@@ -5,7 +5,7 @@ import re
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 
 import gradio as gr
 import numpy as np
@@ -67,11 +67,37 @@ def _safe_file_id(value: Optional[str], max_len: int = 20) -> str:
     return (s or "unknown")[:max_len]
 
 
+def _ensure_str_list(value: Optional[object]) -> List[str]:
+    """
+    Normalise column-name parameters from callers that may pass a single string.
+
+    Downstream code expects a list of column names; a bare string must become a
+    one-element list (otherwise iteration would walk characters of the string).
+    """
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple)):
+        out: List[str] = []
+        for x in value:
+            if x is None:
+                continue
+            s = str(x).strip()
+            if s:
+                out.append(s)
+        return out
+    if isinstance(value, str):
+        s = value.strip()
+        return [s] if s else []
+    s = str(value).strip()
+    return [s] if s else []
+
+
 # API functions
 from fuzzy_address_matcher.addressbase_api_funcs import places_api_query
 from fuzzy_address_matcher.config import (
     MAX_PARALLEL_WORKERS,
     OUTPUT_FOLDER,
+    PRINT_MATCH_STAGE_SUMMARY_TO_CONSOLE,
     RUN_BATCHES_IN_PARALLEL,
     SAVE_INTERIM_FILES,
     SAVE_OUTPUT_FILES,
@@ -193,17 +219,21 @@ def _safe_file_stem(name: str, default: str) -> str:
     return stem
 
 
-def _stand_cache_path(output_folder: str, input_name: str, stand_kind: str) -> str:
+def _stand_cache_path(
+    output_folder: str, input_name: str, stand_kind: str, blocker_mode: str
+) -> str:
     """
     input_name: original input file name (or a descriptive label like 'API').
     stand_kind: 'stand_min' or 'stand_full'.
-    Produces <output_folder>/<input_stem>_<stand_kind>.parquet
+    blocker_mode: 'postcode' or 'street' (cache isolation by match mode).
+    Produces <output_folder>/<input_stem>_<stand_kind>_<blocker_mode>.parquet
     """
     stem = _safe_file_stem(input_name, default="data")
     out_dir = output_folder or ""
     if out_dir and not out_dir.endswith((os.sep, "/")):
         out_dir = out_dir + os.sep
-    return os.path.join(out_dir, f"{stem}_{stand_kind}.parquet")
+    mode = _safe_file_stem(blocker_mode, default="postcode")
+    return os.path.join(out_dir, f"{stem}_{stand_kind}_{mode}.parquet")
 
 
 def _standardise_search_df(
@@ -454,6 +484,7 @@ def run_single_match_batch_worker(
     batch_match: MatcherClass,
     total_batches: int,
     use_postcode_blocker: bool,
+    print_match_stage_summary_to_console: bool,
 ) -> Tuple[int, str, MatcherClass]:
     """
     Worker wrapper for parallel execution.
@@ -466,6 +497,7 @@ def run_single_match_batch_worker(
         use_postcode_blocker=use_postcode_blocker,
         write_outputs=False,
         show_progress=False,
+        print_match_stage_summary_to_console=print_match_stage_summary_to_console,
     )
     return batch_n, summary, batch_out
 
@@ -1247,6 +1279,7 @@ def load_match_data_and_filter(
         else:
             Matcher.search_df["Matched with reference address"] = previously_matched
 
+    print("Shape of ref_df before filtering is: ", Matcher.ref_df.shape)
     print("Shape of search_df before filtering: ", Matcher.search_df.shape)
 
     ### Filter addresses to those with length > 0
@@ -1349,8 +1382,6 @@ def load_match_data_and_filter(
                 Matcher.search_df = Matcher.search_df[
                     (postcode_found_in_search) & (length_more_than_0)
                 ]
-
-            print("Shape of ref_df before filtering is: ", Matcher.ref_df.shape)
 
             unique_search_pcode_area = (
                 Matcher.search_df["postcode_search_area"]
@@ -1600,15 +1631,16 @@ def fuzzy_address_match(
     data_state: Optional[PandasDataFrame] = None,
     results_data_state: Optional[PandasDataFrame] = None,
     ref_data_state: Optional[PandasDataFrame] = None,
-    in_colnames: Optional[List[str]] = None,
-    in_refcol: Optional[List[str]] = None,
-    in_joincol: Optional[List[str]] = None,
-    in_existing: Optional[List[str]] = None,
+    in_colnames: Optional[Union[str, List[str]]] = None,
+    in_refcol: Optional[Union[str, List[str]]] = None,
+    in_joincol: Optional[Union[str, List[str]]] = None,
+    in_existing: Optional[Union[str, List[str]]] = None,
     in_api: Optional[str] = None,
     in_api_key: Optional[str] = None,
     use_postcode_blocker: bool = USE_POSTCODE_BLOCKER,
     output_folder: Optional[str] = None,
     save_output_files: bool = SAVE_OUTPUT_FILES,
+    print_match_stage_summary_to_console: bool = PRINT_MATCH_STAGE_SUMMARY_TO_CONSOLE,
     run_batches_in_parallel: bool = RUN_BATCHES_IN_PARALLEL,
     max_parallel_workers: Optional[int] = MAX_PARALLEL_WORKERS,
     InitMatch: MatcherClass = InitMatch,
@@ -1649,14 +1681,20 @@ def fuzzy_address_match(
         results_data_state: Results dataframe state (used by the UI pathway). Optional if `results_df` is provided.
         ref_data_state: Reference dataframe state (used by the UI pathway). Optional if `ref_df` is provided.
         in_colnames: Column names from the search data used to construct the searchable address.
+            May be a single string or a list of strings.
         in_refcol: Column names from the reference data used to construct the reference address.
+            May be a single string or a list of strings.
         in_joincol: Column name(s) used as join/key fields between intermediate and original data.
+            May be a single string (e.g. 'UPRN') or a list of strings; a string is wrapped as a one-element list.
         in_existing: Column name(s) for any existing identifiers/fields to preserve through matching.
+            May be a single string or a list of strings.
         in_api: API mode / query type. If falsy, the reference data is loaded from `in_ref`.
         in_api_key: API key used when `in_api` is provided.
         use_postcode_blocker: If True, apply postcode-based blocking to reduce candidate comparisons.
         output_folder: Optional override for the output folder.
         save_output_files: If True, save final output CSV files (results/diagnostics/summary).
+        print_match_stage_summary_to_console: If True, print per-stage match statistics
+            (e.g. "For the Fuzzy standardised dataset...") to stdout during the run.
         run_batches_in_parallel: If True, process batches concurrently using multiple workers.
         max_parallel_workers: Maximum number of parallel workers (only used when parallel batching is enabled).
         InitMatch: Matcher object (or class instance) that carries configuration and intermediate state.
@@ -1775,10 +1813,11 @@ def fuzzy_address_match(
         ref_data_state = pd.DataFrame()
 
     # Ensure lists are always lists (avoids mutable default args and None handling).
-    in_colnames = in_colnames or []
-    in_refcol = in_refcol or []
-    in_joincol = in_joincol or []
-    in_existing = in_existing or []
+    # Single strings must become one-element lists so we never iterate characters.
+    in_colnames = _ensure_str_list(in_colnames)
+    in_refcol = _ensure_str_list(in_refcol)
+    in_joincol = _ensure_str_list(in_joincol)
+    in_existing = _ensure_str_list(in_existing)
 
     # Normalise file inputs (paths or Gradio uploads) into list-of-file-like objects.
     in_file = _as_file_list(in_file)
@@ -1913,8 +1952,13 @@ def fuzzy_address_match(
     progress(0.1, desc="Performing minimal standardisation")
 
     _stand_out = getattr(InitMatch, "output_folder", None) or output_folder
-    _path_min_s = _stand_cache_path(_stand_out, InitMatch.file_name, "stand_min")
-    _path_min_r = _stand_cache_path(_stand_out, InitMatch.ref_name, "stand_min")
+    _cache_mode = "postcode" if use_postcode_blocker else "street"
+    _path_min_s = _stand_cache_path(
+        _stand_out, InitMatch.file_name, "stand_min", _cache_mode
+    )
+    _path_min_r = _stand_cache_path(
+        _stand_out, InitMatch.ref_name, "stand_min", _cache_mode
+    )
 
     def _cache_is_compatible(
         cached_df: pd.DataFrame,
@@ -1922,6 +1966,7 @@ def fuzzy_address_match(
         *,
         key_col: str,
         required_col: str,
+        compare_cols: Optional[List[str]] = None,
     ) -> bool:
         """
         Validate that a cached standardisation frame matches the current run.
@@ -1930,6 +1975,8 @@ def fuzzy_address_match(
         - required_col exists (e.g. search_address_stand/ref_address_stand)
         - key_col exists (e.g. index/ref_index)
         - key set matches (prevents reusing cache from a different input)
+        - if compare_cols are available on both frames, a key-sorted value signature
+          also matches (guards against stale cache with same key set)
         """
         if (
             cached_df is None
@@ -1945,9 +1992,46 @@ def fuzzy_address_match(
         if key_col not in expected_df.columns:
             return False
 
+        # Reject non-unique keys to avoid many-to-many ambiguities.
+        if cached_df[key_col].astype(str).duplicated().any():
+            return False
+        if expected_df[key_col].astype(str).duplicated().any():
+            return False
+
         cached_keys = set(cached_df[key_col].astype(str).tolist())
         expected_keys = set(expected_df[key_col].astype(str).tolist())
-        return cached_keys == expected_keys
+        if cached_keys != expected_keys:
+            return False
+
+        if compare_cols:
+            # Compare a deterministic signature over key-sorted value tuples for
+            # whichever columns are present on both sides.
+            cols_present = [
+                c
+                for c in compare_cols
+                if (c in cached_df.columns) and (c in expected_df.columns)
+            ]
+            if cols_present:
+                lhs = (
+                    expected_df[[key_col] + cols_present]
+                    .copy()
+                    .assign(**{key_col: expected_df[key_col].astype(str)})
+                    .sort_values(by=[key_col], kind="stable")
+                    .fillna("")
+                    .astype(str)
+                )
+                rhs = (
+                    cached_df[[key_col] + cols_present]
+                    .copy()
+                    .assign(**{key_col: cached_df[key_col].astype(str)})
+                    .sort_values(by=[key_col], kind="stable")
+                    .fillna("")
+                    .astype(str)
+                )
+                if not lhs.equals(rhs):
+                    return False
+
+        return True
 
     _loaded_min_s = False
     if USE_EXISTING_STANDARDISED_FILES and os.path.isfile(_path_min_s):
@@ -1962,6 +2046,7 @@ def fuzzy_address_match(
             InitMatch.search_df_cleaned,
             key_col=InitMatch.search_df_key_field,
             required_col="search_address_stand",
+            compare_cols=["full_address", "postcode"],
         ):
             InitMatch.search_df_after_stand = cached
             _loaded_min_s = True
@@ -1991,6 +2076,7 @@ def fuzzy_address_match(
             InitMatch.ref_df_cleaned,
             key_col="ref_index",
             required_col="ref_address_stand",
+            compare_cols=["fulladdress", "Postcode"],
         ):
             InitMatch.ref_df_after_stand = cached
             _loaded_min_r = True
@@ -2021,8 +2107,12 @@ def fuzzy_address_match(
 
     # Standardise - full
     tic = time.perf_counter()
-    _path_full_s = _stand_cache_path(_stand_out, InitMatch.file_name, "stand_full")
-    _path_full_r = _stand_cache_path(_stand_out, InitMatch.ref_name, "stand_full")
+    _path_full_s = _stand_cache_path(
+        _stand_out, InitMatch.file_name, "stand_full", _cache_mode
+    )
+    _path_full_r = _stand_cache_path(
+        _stand_out, InitMatch.ref_name, "stand_full", _cache_mode
+    )
 
     _loaded_full_s = False
     if USE_EXISTING_STANDARDISED_FILES and os.path.isfile(_path_full_s):
@@ -2037,6 +2127,7 @@ def fuzzy_address_match(
             InitMatch.search_df_cleaned,
             key_col=InitMatch.search_df_key_field,
             required_col="search_address_stand",
+            compare_cols=["full_address", "postcode"],
         ):
             InitMatch.search_df_after_full_stand = cached
             _loaded_full_s = True
@@ -2066,6 +2157,7 @@ def fuzzy_address_match(
             InitMatch.ref_df_cleaned,
             key_col="ref_index",
             required_col="ref_address_stand",
+            compare_cols=["fulladdress", "Postcode"],
         ):
             InitMatch.ref_df_after_full_stand = cached
             _loaded_full_r = True
@@ -2204,6 +2296,7 @@ def fuzzy_address_match(
                         batch_match,
                         number_of_batches,
                         use_postcode_blocker_effective,
+                        print_match_stage_summary_to_console,
                     )
                     for batch_n, batch_match in batch_inputs
                 ]
@@ -2224,6 +2317,7 @@ def fuzzy_address_match(
                     BatchMatch_out,
                     "All up to and including batch " + str(batch_n + 1),
                     write_outputs=False,
+                    print_match_stage_summary_to_console=print_match_stage_summary_to_console,
                 )
 
         except Exception as parallel_error:
@@ -2259,6 +2353,7 @@ def fuzzy_address_match(
                     number_of_batches,
                     use_postcode_blocker=use_postcode_blocker_effective,
                     write_outputs=SAVE_INTERIM_FILES,
+                    print_match_stage_summary_to_console=print_match_stage_summary_to_console,
                 )
 
             OutputMatch = combine_two_matches(
@@ -2266,6 +2361,7 @@ def fuzzy_address_match(
                 BatchMatch_out,
                 "All up to and including batch " + str(batch_n + 1),
                 write_outputs=SAVE_INTERIM_FILES,
+                print_match_stage_summary_to_console=print_match_stage_summary_to_console,
             )
 
     if in_api:
@@ -2373,10 +2469,9 @@ def fuzzy_address_match(
             if ("full_match" in diag_add.columns) and (
                 "Matched with reference address" in missing_rows.columns
             ):
-                diag_add["full_match"] = (
-                    missing_rows["Matched with reference address"]
-                    .fillna(False)
-                    .astype(bool)
+                diag_add["full_match"] = _bool_mask(
+                    missing_rows["Matched with reference address"],
+                    default=False,
                 )
             if "fuzzy_score" in diag_add.columns:
                 diag_add["fuzzy_score"] = 0.0
@@ -2398,24 +2493,25 @@ def fuzzy_address_match(
                     ),
                 )
 
+            # Drop all-NA columns in the placeholder frame so concat does not trigger the
+            # pandas FutureWarning about empty/all-NA entries affecting result dtypes.
+            diag_add = diag_add.dropna(axis=1, how="all")
             diag_df = pd.concat([diag_df, diag_add], axis=0, ignore_index=True)
 
         # Canonicalise key/address/exclusion from results so diagnostics aligns exactly.
         _exclusion_map = results_keyed.set_index("__key_str")["Excluded from search"]
         if "Excluded from search" in diag_df.columns:
-            diag_df["Excluded from search"] = (
-                diag_df["__key_str"]
-                .map(_exclusion_map)
-                .fillna(diag_df["Excluded from search"])
+            _excl_m = diag_df["__key_str"].map(_exclusion_map)
+            diag_df["Excluded from search"] = _excl_m.where(
+                _excl_m.notna(), diag_df["Excluded from search"]
             )
         if ("search_orig_address" in diag_df.columns) and (
             "Search data address" in results_keyed.columns
         ):
             _addr_map = results_keyed.set_index("__key_str")["Search data address"]
-            diag_df["search_orig_address"] = (
-                diag_df["__key_str"]
-                .map(_addr_map)
-                .fillna(diag_df["search_orig_address"])
+            _addr_m = diag_df["__key_str"].map(_addr_map)
+            diag_df["search_orig_address"] = _addr_m.where(
+                _addr_m.notna(), diag_df["search_orig_address"]
             )
         if ("full_match" in diag_df.columns) and (
             "Matched with reference address" in results_keyed.columns
@@ -2423,11 +2519,12 @@ def fuzzy_address_match(
             _matched_map = results_keyed.set_index("__key_str")[
                 "Matched with reference address"
             ]
-            diag_df["full_match"] = (
-                diag_df["__key_str"].map(_matched_map).fillna(diag_df["full_match"])
-            )
+            _fm_m = diag_df["__key_str"].map(_matched_map)
+            diag_df["full_match"] = _fm_m.where(_fm_m.notna(), diag_df["full_match"])
+            diag_df["full_match"] = _bool_mask(diag_df["full_match"], default=False)
         _key_map = results_keyed.set_index("__key_str")[key_col]
-        diag_df[key_col] = diag_df["__key_str"].map(_key_map).fillna(diag_df[key_col])
+        _key_m = diag_df["__key_str"].map(_key_map)
+        diag_df[key_col] = _key_m.where(_key_m.notna(), diag_df[key_col])
 
         # One row per key in diagnostics; prefer successful/high-score rows.
         if "fuzzy_score" in diag_df.columns:
@@ -2467,7 +2564,8 @@ def fuzzy_address_match(
         f"The overall match (all batches) took {overall_toc - overall_tic:0.1f} seconds"
     )
 
-    print(OutputMatch.output_summary)
+    if print_match_stage_summary_to_console:
+        print(OutputMatch.output_summary)
 
     if OutputMatch.output_summary == "":
         OutputMatch.output_summary = "No matches were found."
@@ -2641,10 +2739,9 @@ def fuzzy_address_match(
                 mapped_vals = _keys.map(_series_map)
 
                 if diag_output_col in OutputMatch.match_results_output.columns:
+                    _cur = OutputMatch.match_results_output[diag_output_col]
                     OutputMatch.match_results_output[diag_output_col] = (
-                        OutputMatch.match_results_output[diag_output_col].fillna(
-                            mapped_vals
-                        )
+                        mapped_vals.where(mapped_vals.notna(), _cur)
                     )
                 else:
                     OutputMatch.match_results_output[diag_output_col] = mapped_vals
@@ -2708,9 +2805,6 @@ def fuzzy_address_match(
 def create_simple_batch_ranges(
     df: PandasDataFrame, ref_df: PandasDataFrame, batch_size: int, ref_batch_size: int
 ):
-    # print("Search df batch size: ", batch_size)
-    # print("ref_df df batch size: ", ref_batch_size)
-
     total_rows = df.shape[0]
     ref_total_rows = ref_df.shape[0]
 
@@ -2957,6 +3051,7 @@ def run_single_match_batch(
     write_outputs: bool = True,
     show_progress: bool = True,
     progress=gr.Progress(track_tqdm=True),
+    print_match_stage_summary_to_console: bool = PRINT_MATCH_STAGE_SUMMARY_TO_CONSOLE,
 ):
     """
     Over-arching function for running a single batch of data through the full matching process. Calls fuzzy matching, then neural network match functions in order. It outputs a summary of the match, and a MatcherClass with the matched data included.
@@ -2998,7 +3093,11 @@ def run_single_match_batch(
             return message, InitialMatch
 
         FuzzyNotStdMatch = combine_two_matches(
-            InitialMatch, FuzzyNotStdMatch, df_name, write_outputs=write_outputs
+            InitialMatch,
+            FuzzyNotStdMatch,
+            df_name,
+            write_outputs=write_outputs,
+            print_match_stage_summary_to_console=print_match_stage_summary_to_console,
         )
 
         full_match_series = _bool_mask(
@@ -3041,7 +3140,11 @@ def run_single_match_batch(
             write_outputs=write_outputs,
         )
         FuzzyStdMatch = combine_two_matches(
-            FuzzyNotStdMatch, FuzzyStdMatch, df_name, write_outputs=write_outputs
+            FuzzyNotStdMatch,
+            FuzzyStdMatch,
+            df_name,
+            write_outputs=write_outputs,
+            print_match_stage_summary_to_console=print_match_stage_summary_to_console,
         )
 
         """ Continue if reference file in correct format, and neural net model exists. Also if data not too long """
@@ -3088,7 +3191,11 @@ def run_single_match_batch(
             write_outputs=write_outputs,
         )
         FuzzyNNetNotStdMatch = combine_two_matches(
-            FuzzyStdMatch, FuzzyNNetNotStdMatch, df_name, write_outputs=write_outputs
+            FuzzyStdMatch,
+            FuzzyNNetNotStdMatch,
+            df_name,
+            write_outputs=write_outputs,
+            print_match_stage_summary_to_console=print_match_stage_summary_to_console,
         )
 
         if len(FuzzyNNetNotStdMatch.search_df_not_matched) == 0:
@@ -3125,6 +3232,7 @@ def run_single_match_batch(
             FuzzyNNetStdMatch,
             df_name,
             write_outputs=write_outputs,
+            print_match_stage_summary_to_console=print_match_stage_summary_to_console,
         )
 
         if not run_fuzzy_match:
@@ -3202,6 +3310,7 @@ def orchestrate_single_match_batch(
             Matcher.new_join_col,
             use_postcode_blocker=use_postcode_blocker,
             existing_match_col=_existing_col,
+            pre_filter_search_df=getattr(Matcher, "pre_filter_search_df", None),
         )
         if match_results_output.empty:
             print("Match results empty")
@@ -3249,6 +3358,7 @@ def orchestrate_single_match_batch(
                 Matcher.search_df_after_full_stand,
                 Matcher.new_join_col,
                 existing_match_col=_existing_col,
+                pre_filter_search_df=getattr(Matcher, "pre_filter_search_df", None),
             )
         )
 
@@ -3311,6 +3421,7 @@ def full_fuzzy_match(
     filter_to_lambeth_pcodes: bool = False,
     use_postcode_blocker: bool = True,
     existing_match_col: Optional[str] = None,
+    pre_filter_search_df: Optional[PandasDataFrame] = None,
 ):
     """
     Compare addresses in a 'search address' dataframe with a 'reference address' dataframe by using fuzzy matching from the rapidfuzz package, blocked by postcode and then street.
@@ -3336,6 +3447,8 @@ def full_fuzzy_match(
         ref_df_after_stand = ref_df_after_full_stand
     else:
         df_name = "non-standardised address"
+
+    print("Fuzzy matching with " + df_name)
 
     # RUN WITH POSTCODE AS A BLOCKER #
     can_run_postcode_blocker = (
@@ -3378,9 +3491,9 @@ def full_fuzzy_match(
             match_results_output = pd.DataFrame()
             search_df_not_matched = search_df_after_stand.copy()
         else:
-            print("Starting the fuzzy match")
+            print("Fuzzy matching with postcode as blocker")
 
-            tic = time.perf_counter()
+            time.perf_counter()
             results = string_match_by_post_code_multiple(
                 match_address_series=search_df_after_stand_series.copy(),
                 reference_address_series=ref_df_after_stand_series_checked,
@@ -3388,8 +3501,8 @@ def full_fuzzy_match(
                 scorer_name=fuzzy_scorer_used,
             )
 
-            toc = time.perf_counter()
-            print(f"Performed the fuzzy match in {toc - tic:0.1f} seconds")
+            time.perf_counter()
+            # print(f"Performed the fuzzy match in {toc - tic:0.1f} seconds")
 
             # Create result dfs
             match_results_output, diag_shortlist, diag_best_match = (
@@ -3439,11 +3552,10 @@ def full_fuzzy_match(
                 new_join_col,
                 ref_df_cleaned=ref_df_cleaned,
                 existing_match_col=existing_match_col,
+                pre_filter_search_df=pre_filter_search_df,
             )
         else:
             results_on_orig_df = match_results_output
-
-        print("results_on_orig_df in fuzzy_match shape: ", results_on_orig_df.shape)
 
         return (
             diag_shortlist,
@@ -3572,6 +3684,7 @@ def full_fuzzy_match(
                 new_join_col,
                 ref_df_cleaned=ref_df_cleaned,
                 existing_match_col=existing_match_col,
+                pre_filter_search_df=pre_filter_search_df,
             )
         else:
             results_on_orig_df = match_results_output
@@ -3585,9 +3698,9 @@ def full_fuzzy_match(
             search_address_cols,
         )
 
-    print("Starting the fuzzy match with street as blocker")
+    print("Fuzzy matching with street as blocker")
 
-    tic = time.perf_counter()
+    time.perf_counter()
     results_st = string_match_by_post_code_multiple(
         match_address_series=search_df_match_series_street.copy(),
         reference_address_series=ref_df_after_stand_series_street_checked.copy(),
@@ -3595,9 +3708,9 @@ def full_fuzzy_match(
         scorer_name=fuzzy_scorer_used,
     )
 
-    toc = time.perf_counter()
+    time.perf_counter()
 
-    print(f"Performed the fuzzy match in {toc - tic:0.1f} seconds")
+    # print(f"Performed the fuzzy match in {toc - tic:0.1f} seconds")
 
     match_results_output_st, diag_shortlist_st, diag_best_match_st = (
         _create_fuzzy_match_results_output(
@@ -3636,11 +3749,10 @@ def full_fuzzy_match(
             new_join_col,
             ref_df_cleaned=ref_df_cleaned,
             existing_match_col=existing_match_col,
+            pre_filter_search_df=pre_filter_search_df,
         )
     else:
         results_on_orig_df = match_results_output
-
-    print("results_on_orig_df in fuzzy_match shape: ", results_on_orig_df.shape)
 
     return (
         diag_shortlist,
@@ -3680,6 +3792,7 @@ def full_nn_match(
     search_df_after_full_stand: PandasDataFrame,
     new_join_col: List[str],
     existing_match_col: Optional[str] = None,
+    pre_filter_search_df: Optional[PandasDataFrame] = None,
 ):
     """
     Use a neural network model to partition 'search addresses' into consituent parts in the format of UK Ordnance Survey Land Property Identifier (LPI) addresses. These address components are compared individually against reference addresses in the same format to give an overall match score using the recordlinkage package.
@@ -3707,9 +3820,6 @@ def full_nn_match(
 
     else:
         df_name = "non-standardised address"
-
-    print(search_df_after_stand.shape[0])
-    print(ref_df_after_stand.shape[0])
 
     # Predict on search data to extract LPI address components
 
@@ -3814,10 +3924,10 @@ def full_nn_match(
             match_results, matched_output_SBM_pc, index_col=search_df_key_field
         )
 
-    summary_pc = create_match_summary(
+    create_match_summary(
         match_results_output_final_pc, df_name="NNet blocked by Postcode " + df_name
     )
-    print(summary_pc)
+    # print(summary_pc)
 
     ## Run with Street as blocker column
 
@@ -3859,10 +3969,10 @@ def full_nn_match(
         index_col=search_df_key_field,
     )
 
-    summary_street = create_match_summary(
+    create_match_summary(
         match_results_output_final_st, df_name="NNet blocked by Street " + df_name
     )
-    print(summary_street)
+    # print(summary_street)
 
     # I decided in the end not to use PaoStartNumber as a blocker column. I get only a couple more matches in general for a big increase in processing time
 
@@ -3887,6 +3997,7 @@ def full_nn_match(
             new_join_col,
             ref_df_cleaned=ref_df_cleaned,
             existing_match_col=existing_match_col,
+            pre_filter_search_df=pre_filter_search_df,
         )
     else:
         results_on_orig_df = match_results_output_final_three
@@ -4016,6 +4127,7 @@ def combine_two_matches(
     NewMatchClass: MatcherClass,
     df_name: str,
     write_outputs: bool = True,
+    print_match_stage_summary_to_console: bool = PRINT_MATCH_STAGE_SUMMARY_TO_CONSOLE,
 ) -> MatcherClass:
     """
     Combine two MatcherClass objects to retain newest matches and drop duplicate addresses.
@@ -4110,23 +4222,35 @@ def combine_two_matches(
         .str.strip()
     )
 
-    match_results_output_match_score_is_0 = NewMatchClass.match_results_output[
-        NewMatchClass.match_results_output["fuzzy_score"] == 0.0
-    ][["index", "fuzzy_score"]].drop_duplicates(subset="index")
-    match_results_output_match_score_is_0["index"] = (
-        match_results_output_match_score_is_0["index"].astype(str)
-    )
-    # NewMatchClass.results_on_orig_df["index"] = NewMatchClass.results_on_orig_df["index"].astype(str)
-    NewMatchClass.results_on_orig_df = NewMatchClass.results_on_orig_df.merge(
-        match_results_output_match_score_is_0, on="index", how="left"
-    )
+    # Some abort/empty-stage paths produce a match_results_output without fuzzy_score.
+    # Guard this enrichment so combine does not fail on batches with no match rows.
+    if (
+        isinstance(NewMatchClass.match_results_output, pd.DataFrame)
+        and ("fuzzy_score" in NewMatchClass.match_results_output.columns)
+        and ("index" in NewMatchClass.match_results_output.columns)
+        and ("index" in NewMatchClass.results_on_orig_df.columns)
+    ):
+        match_results_output_match_score_is_0 = NewMatchClass.match_results_output[
+            NewMatchClass.match_results_output["fuzzy_score"] == 0.0
+        ][["index", "fuzzy_score"]].drop_duplicates(subset="index")
+        match_results_output_match_score_is_0["index"] = (
+            match_results_output_match_score_is_0["index"].astype(str)
+        )
+        # NewMatchClass.results_on_orig_df["index"] = NewMatchClass.results_on_orig_df["index"].astype(str)
+        NewMatchClass.results_on_orig_df["index"] = NewMatchClass.results_on_orig_df[
+            "index"
+        ].astype(str)
+        NewMatchClass.results_on_orig_df = NewMatchClass.results_on_orig_df.merge(
+            match_results_output_match_score_is_0, on="index", how="left"
+        )
 
-    NewMatchClass.results_on_orig_df.loc[
-        NewMatchClass.results_on_orig_df["fuzzy_score"] == 0.0, "Excluded from search"
-    ] = "Match score is 0"
-    NewMatchClass.results_on_orig_df = NewMatchClass.results_on_orig_df.drop(
-        "fuzzy_score", axis=1
-    )
+        NewMatchClass.results_on_orig_df.loc[
+            NewMatchClass.results_on_orig_df["fuzzy_score"] == 0.0,
+            "Excluded from search",
+        ] = "Match score is 0"
+        NewMatchClass.results_on_orig_df = NewMatchClass.results_on_orig_df.drop(
+            "fuzzy_score", axis=1
+        )
 
     # Drop any duplicates, prioritise any matches
     NewMatchClass.results_on_orig_df["index"] = NewMatchClass.results_on_orig_df[
@@ -4155,7 +4279,8 @@ def combine_two_matches(
     NewMatchClass.output_summary = create_match_summary(
         NewMatchClass.match_results_output, df_name=df_name
     )
-    print(NewMatchClass.output_summary)
+    if print_match_stage_summary_to_console:
+        print(NewMatchClass.output_summary)
 
     NewMatchClass.search_df_not_matched = filter_not_matched(
         NewMatchClass.match_results_output,
