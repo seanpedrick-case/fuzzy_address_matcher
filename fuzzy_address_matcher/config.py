@@ -514,6 +514,13 @@ SAVE_OUTPUT_FILES = convert_string_to_boolean(
     get_or_create_env_var("SAVE_OUTPUT_FILES", "True")
 )
 
+# If True, print per-stage match statistics (e.g. "For the Fuzzy standardised dataset...")
+# to stdout during matching. When False, those lines are suppressed; summaries are still
+# returned in the UI / function return values.
+PRINT_MATCH_STAGE_SUMMARY_TO_CONSOLE = convert_string_to_boolean(
+    get_or_create_env_var("PRINT_MATCH_STAGE_SUMMARY_TO_CONSOLE", "False")
+)
+
 batch_size = _env_int(
     "MATCHER_BATCH_SIZE", 10000
 )  # Maximum size per batch for the search address rows
