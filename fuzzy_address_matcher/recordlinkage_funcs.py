@@ -4,7 +4,7 @@ from typing import Dict, List, Tuple, Type
 import pandas as pd
 import recordlinkage
 
-from tools.config import score_cut_off_nnet_street
+from fuzzy_address_matcher.config import score_cut_off_nnet_street
 
 PandasDataFrame = Type[pd.DataFrame]
 PandasSeries = Type[pd.Series]
@@ -407,7 +407,7 @@ def create_matched_results_nnet(
         how="left",
     )
 
-    from tools.fuzzy_match import create_diag_shortlist
+    from fuzzy_address_matcher.fuzzy_match import create_diag_shortlist
 
     matched_output_SBM = create_diag_shortlist(
         matched_output_SBM,

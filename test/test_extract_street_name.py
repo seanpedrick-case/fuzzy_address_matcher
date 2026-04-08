@@ -1,4 +1,4 @@
-from tools.preparation import extract_street_name
+from fuzzy_address_matcher.preparation import extract_street_name
 
 
 def test_extract_street_name():

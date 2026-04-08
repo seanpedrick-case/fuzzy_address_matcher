@@ -68,9 +68,10 @@ def _safe_file_id(value: Optional[str], max_len: int = 20) -> str:
 
 
 # API functions
-from tools.addressbase_api_funcs import places_api_query
-from tools.config import (
+from fuzzy_address_matcher.addressbase_api_funcs import places_api_query
+from fuzzy_address_matcher.config import (
     MAX_PARALLEL_WORKERS,
+    OUTPUT_FOLDER,
     RUN_BATCHES_IN_PARALLEL,
     SAVE_INTERIM_FILES,
     SAVE_OUTPUT_FILES,
@@ -81,28 +82,31 @@ from tools.config import (
     output_folder,
     ref_batch_size,
 )
-from tools.constants import (
+from fuzzy_address_matcher.constants import (
     InitMatch,
     MatcherClass,
     run_nnet_match,
 )
-from tools.fuzzy_match import (
+from fuzzy_address_matcher.fuzzy_match import (
     _create_fuzzy_match_results_output,
     create_results_df,
     string_match_by_post_code_multiple,
 )
-from tools.helper_functions import initial_data_load, sum_numbers_before_seconds
+from fuzzy_address_matcher.helper_functions import (
+    initial_data_load,
+    sum_numbers_before_seconds,
+)
 
 # Neural network functions
 ### Predict function for imported model
-from tools.model_predict import (
+from fuzzy_address_matcher.model_predict import (
     full_predict_func,
     full_predict_torch,
     post_predict_clean,
 )
 
 # Imports (must be module-level)
-from tools.preparation import (
+from fuzzy_address_matcher.preparation import (
     check_no_number_addresses,
     extract_postcode,
     extract_street_name,
@@ -111,8 +115,9 @@ from tools.preparation import (
     prepare_search_address_string,
     remove_non_postal,
 )
-from tools.recordlinkage_funcs import score_based_match
-from tools.standardise import (
+from fuzzy_address_matcher.recordlinkage_funcs import score_based_match
+from fuzzy_address_matcher.secure_path_utils import secure_path_join
+from fuzzy_address_matcher.standardise import (
     remove_postcode,
     standardise_address,
 )
@@ -862,6 +867,7 @@ def query_addressbase_api(
             # Matcher.ref_df = Matcher.ref_df.loc[Matcher.ref_df["LOCAL_CUSTODIAN_CODE"] != 7655,:]
 
         if save_file:
+            os.makedirs(base_output_folder, exist_ok=True)
             final_api_output_file_name_pq = os.path.join(
                 base_output_folder, api_ref_save_loc[:-5] + ".parquet"
             )
@@ -1673,14 +1679,43 @@ def fuzzy_address_match(
         return [_FilePathLike(str(value))]
 
     # Resolve output folder robustly for UI, scripts, and CI.
-    # Priority: explicit `output_folder` arg -> config `output_folder` -> local ./output/
-    effective_output_folder = (
-        output_folder or globals().get("output_folder") or "output"
+    # SECURITY: user-specified `output_folder` must be within configured OUTPUT_FOLDER.
+    def _resolve_output_folder_within_base(
+        base_folder: str, user_folder: Optional[str]
+    ) -> str:
+        base = str(base_folder or "").strip() or "output"
+
+        # Ensure base exists and is absolute/resolved
+        base_path = os.path.abspath(base)
+        os.makedirs(base_path, exist_ok=True)
+
+        if user_folder is None or not str(user_folder).strip():
+            out_path = base_path
+        else:
+            uf = str(user_folder).strip()
+            if os.path.isabs(uf):
+                cand = os.path.abspath(uf)
+                try:
+                    # Containment check
+                    os.path.commonpath([base_path, cand])
+                except ValueError as e:
+                    raise PermissionError(f"Invalid output_folder path {uf!r}") from e
+                if os.path.commonpath([base_path, cand]) != base_path:
+                    raise PermissionError(
+                        f"output_folder must be within OUTPUT_FOLDER ({base_path}). Got: {uf}"
+                    )
+                out_path = cand
+            else:
+                out_path = str(secure_path_join(base_path, uf))
+
+        os.makedirs(out_path, exist_ok=True)
+        if not out_path.endswith(("\\", "/")):
+            out_path = out_path + os.sep
+        return out_path
+
+    effective_output_folder = _resolve_output_folder_within_base(
+        OUTPUT_FOLDER, output_folder
     )
-    if not str(effective_output_folder).strip():
-        effective_output_folder = "output"
-    if not str(effective_output_folder).endswith(("\\", "/")):
-        effective_output_folder = str(effective_output_folder) + os.sep
     InitMatch.output_folder = effective_output_folder
 
     def _notify_ui(level: str, message: str) -> None:

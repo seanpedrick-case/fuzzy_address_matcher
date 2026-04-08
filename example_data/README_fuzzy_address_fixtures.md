@@ -13,7 +13,7 @@ Expected overlap:
 ## Example usage with file paths
 
 ```python
-from tools.matcher_funcs import fuzzy_address_match
+from fuzzy_address_matcher.matcher_funcs import fuzzy_address_match
 
 msg, output_files, est, _ = fuzzy_address_match(
     in_file="example_data/search_addresses_london.csv",
@@ -27,7 +27,7 @@ msg, output_files, est, _ = fuzzy_address_match(
 
 ```python
 import pandas as pd
-from tools.matcher_funcs import fuzzy_address_match
+from fuzzy_address_matcher.matcher_funcs import fuzzy_address_match
 
 search_df = pd.read_csv("example_data/search_addresses_london.csv")
 ref_df = pd.read_csv("example_data/reference_addresses_london.csv")

@@ -1,9 +1,9 @@
 """
 Gradio GUI entry point for fuzzy_address_matcher.
 
-This module lives under `tools/` so it is included in the PyPI package (see
-`pyproject.toml` package discovery). The repository root `app.py` remains as a
-thin wrapper for Hugging Face Spaces and local development.
+This module lives under `fuzzy_address_matcher/` so it is included in the PyPI
+package (see `pyproject.toml` package discovery). The repository root `app.py`
+remains as a thin wrapper for Hugging Face Spaces and local development.
 """
 
 from __future__ import annotations
@@ -15,9 +15,9 @@ from pathlib import Path
 import gradio as gr
 import pandas as pd
 
-from tools.auth import authenticate_user
-from tools.aws_functions import upload_file_to_s3
-from tools.config import (
+from fuzzy_address_matcher.auth import authenticate_user
+from fuzzy_address_matcher.aws_functions import upload_file_to_s3
+from fuzzy_address_matcher.config import (
     ACCESS_LOG_DYNAMODB_TABLE_NAME,
     ACCESS_LOGS_FOLDER,
     ADDRESSBASE_API_KEY,
@@ -42,14 +42,14 @@ from tools.config import (
     USAGE_LOGS_FOLDER,
     output_folder,
 )
-from tools.custom_csvlogger import CSVLogger_custom
-from tools.helper_functions import (
+from fuzzy_address_matcher.custom_csvlogger import CSVLogger_custom
+from fuzzy_address_matcher.helper_functions import (
     ensure_output_folder_exists,
     get_connection_params,
     initial_data_load,
     reveal_feedback_buttons,
 )
-from tools.matcher_funcs import fuzzy_address_match
+from fuzzy_address_matcher.matcher_funcs import fuzzy_address_match
 
 today = datetime.now().strftime("%d%m%Y")
 today_rev = datetime.now().strftime("%Y%m%d")
@@ -60,7 +60,7 @@ def _resolve_example_file(file_name: str) -> Path:
     Resolve example fixture paths across common runtime contexts.
 
     Search order:
-    1) Installed package data under `tools/example_data/` (PyPI / wheel installs)
+    1) Installed package data under `fuzzy_address_matcher/example_data/` (PyPI / wheel installs)
     2) Current working directory `example_data/` (local `python app.py` / dev runs)
     3) Repository root `example_data/` relative to this module (spaces/container source layout)
     """

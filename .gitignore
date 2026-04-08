@@ -8,6 +8,8 @@
 *.env
 *.zip
 *.pth
+*.done
+*.lock
 test/*
 !test/
 !test/**/*.py
@@ -19,6 +21,8 @@ experiments/*
 build_deps/*
 build/*
 dist/*
+.pytest_cache/
+.ruff_cache/
 .vscode/*
 usage/*
 logs/*
@@ -27,13 +31,14 @@ input/*
 output/*
 docs/*
 fuzzy_address_matcher.egg-info/*
-*.done
-*.lock
 cat_to_idx.txt
 vocab.txt
 word_to_index.txt
 !example_data/search_addresses_london.csv
 !example_data/reference_addresses_london.csv
+!fuzzy_address_matcher/example_data/search_addresses_london.csv
+!fuzzy_address_matcher/example_data/reference_addresses_london.csv
+/.tmp_smoke_test_output/
 /.quarto/
 /_site/
 **/*.quarto_ipynb

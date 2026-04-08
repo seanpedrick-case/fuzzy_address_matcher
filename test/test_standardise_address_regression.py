@@ -2,7 +2,7 @@ import os
 
 import pandas as pd
 
-from tools.standardise import (
+from fuzzy_address_matcher.standardise import (
     extract_letter_one_number_address,
     remove_flat_one_number_address,
     remove_non_housing,

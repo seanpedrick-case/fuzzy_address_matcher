@@ -42,7 +42,7 @@ RUN apt-get update \
 
 ENV APP_HOME=/home/user
 
-# Align with tools/constants.py (GRADIO_OUTPUT_FOLDER) and tools/config.py (CONFIG_FOLDER, APP_CONFIG_PATH).
+# Align with fuzzy_address_matcher/constants.py (GRADIO_OUTPUT_FOLDER) and fuzzy_address_matcher/config.py (CONFIG_FOLDER, APP_CONFIG_PATH).
 # Paths are under the app working directory so relative feedback/logs/usage trees work (see app.py).
 ENV GRADIO_TEMP_DIR=/tmp/gradio_tmp/ \
     GRADIO_OUTPUT_FOLDER=$APP_HOME/app/output/ \

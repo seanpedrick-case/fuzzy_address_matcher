@@ -5,7 +5,12 @@ import hmac
 
 import boto3
 
-from tools.config import AWS_CLIENT_ID, AWS_CLIENT_SECRET, AWS_REGION, AWS_USER_POOL_ID
+from fuzzy_address_matcher.config import (
+    AWS_CLIENT_ID,
+    AWS_CLIENT_SECRET,
+    AWS_REGION,
+    AWS_USER_POOL_ID,
+)
 
 
 def calculate_secret_hash(client_id: str, client_secret: str, username: str):

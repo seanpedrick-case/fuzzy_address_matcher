@@ -11,7 +11,7 @@ openpyxl<=3.1.5
 gradio==6.11.0
 boto3<=1.42.80
 polars<=1.39.3
-numpy<=2.4.3
+numpy<=2.4.4
 requests<=2.33.1
 bleach<=6.3.0
 python-dotenv<=1.2.2

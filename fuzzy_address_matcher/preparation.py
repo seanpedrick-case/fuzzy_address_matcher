@@ -8,7 +8,7 @@ import polars as pl
 from gradio import Progress
 from tqdm import tqdm
 
-from tools.standardise import remove_postcode
+from fuzzy_address_matcher.standardise import remove_postcode
 
 tqdm.pandas()  # Registers the progress_apply method
 

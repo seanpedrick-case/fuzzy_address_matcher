@@ -3,7 +3,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from tools.matcher_funcs import fuzzy_address_match
+from fuzzy_address_matcher.matcher_funcs import fuzzy_address_match
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SEARCH_PATH = REPO_ROOT / "example_data" / "search_addresses_london.csv"

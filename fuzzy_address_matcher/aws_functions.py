@@ -4,7 +4,7 @@ from typing import List, Type
 import boto3
 import pandas as pd
 
-from tools.config import (
+from fuzzy_address_matcher.config import (
     ADDRESS_MATCHER_BUCKET,
     AWS_REGION,
     RUN_AWS_FUNCTIONS,
