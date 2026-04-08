@@ -12,7 +12,7 @@ pytest.importorskip("gradio")
 pytest.importorskip("recordlinkage")
 pytest.importorskip("rapidfuzz")
 
-from tools import matcher_funcs
+from fuzzy_address_matcher import matcher_funcs
 
 SEARCH_FIXTURE = REPO_ROOT / "example_data" / "search_addresses_london.csv"
 REF_FIXTURE = REPO_ROOT / "example_data" / "reference_addresses_london.csv"

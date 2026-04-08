@@ -7,7 +7,7 @@ import pandas as pd
 from rapidfuzz import fuzz, process
 from tqdm import tqdm
 
-from tools.config import fuzzy_match_limit, no_number_fuzzy_match_limit
+from fuzzy_address_matcher.config import fuzzy_match_limit, no_number_fuzzy_match_limit
 
 PandasDataFrame = Type[pd.DataFrame]
 PandasSeries = Type[pd.Series]

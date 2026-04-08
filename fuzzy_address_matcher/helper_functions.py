@@ -11,7 +11,7 @@ from botocore.exceptions import (
     PartialCredentialsError,
 )
 
-from tools.config import (
+from fuzzy_address_matcher.config import (
     AWS_USER_POOL_ID,
     CUSTOM_HEADER,
     CUSTOM_HEADER_VALUE,

@@ -10,7 +10,7 @@ from typing import List, Optional
 import bleach
 from dotenv import load_dotenv
 
-from tools.secure_path_utils import (
+from fuzzy_address_matcher.secure_path_utils import (
     secure_path_join,
 )
 
@@ -320,10 +320,10 @@ APP_CONFIG_PATH = get_or_create_env_var(
 
 if APP_CONFIG_PATH:
     if os.path.exists(APP_CONFIG_PATH):
-        print(f"Loading app variables from config file {APP_CONFIG_PATH}")
+        print(f"Loading app variables from fuzzy_address_matcher config file {APP_CONFIG_PATH}")
         load_dotenv(APP_CONFIG_PATH)
-    else:
-        print("App config file not found at location:", APP_CONFIG_PATH)
+    #else:
+    #    print("App config file not found at location:", APP_CONFIG_PATH)
 
 COGNITO_AUTH = convert_string_to_boolean(get_or_create_env_var("COGNITO_AUTH", "False"))
 
@@ -450,7 +450,7 @@ SHOW_EXAMPLES = convert_string_to_boolean(
 ADDRESSBASE_API_KEY = get_or_create_env_var("ADDRESSBASE_API_KEY", "")
 
 ###
-# Address matcher tuning (also used by tools/constants.py — load after dotenv so
+# Address matcher tuning (also used by fuzzy_address_matcher/constants.py — load after dotenv so
 # config/app_config.env can override). All can be set via environment variables.
 ###
 

@@ -5,18 +5,18 @@ import pandas as pd
 import pytest
 from pandas.errors import SettingWithCopyWarning
 
-from tools.matcher_funcs import fuzzy_address_match
+from fuzzy_address_matcher.matcher_funcs import fuzzy_address_match
 
 
 def _resolve_example_file(file_name: str) -> Path:
     """
     Resolve example fixture paths across common runtime contexts:
-    - installed package data under `tools/example_data/`
+    - installed package data under `fuzzy_address_matcher/example_data/`
     - repo root `example_data/`
     """
     repo_root = Path(__file__).resolve().parents[1]
     candidates = [
-        repo_root / "tools" / "example_data" / file_name,
+        repo_root / "fuzzy_address_matcher" / "example_data" / file_name,
         repo_root / "example_data" / file_name,
     ]
     for c in candidates:
@@ -41,6 +41,9 @@ def test_smoke_fuzzy_address_match_with_dataframes() -> None:
             ref_df=reference_df,
             in_colnames=["address_line_1", "address_line_2", "postcode"],
             in_refcol=["addr1", "addr2", "addr3", "addr4", "postcode"],
+            # Avoid cross-test contamination from cached standardisation files under the
+            # default output folder (which may contain artifacts from earlier local runs).
+            output_folder=".tmp_smoke_test_output",
         )
 
     assert isinstance(msg, str)
@@ -54,7 +57,8 @@ def test_smoke_fuzzy_address_match_with_dataframes() -> None:
         filename = getattr(w, "filename", "") or ""
         _fn = filename.replace("\\", "/")
         _is_target_module = (
-            "/tools/fuzzy_match.py" in _fn or "/tools/matcher_funcs.py" in _fn
+            "/fuzzy_address_matcher/fuzzy_match.py" in _fn
+            or "/fuzzy_address_matcher/matcher_funcs.py" in _fn
         )
         if _is_target_module and (
             issubclass(w.category, FutureWarning)

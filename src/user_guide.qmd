@@ -37,15 +37,20 @@ This installation supports both Python-script usage and the GUI console command.
 Import the matcher function:
 
 ```python
-from tools.matcher_funcs import fuzzy_address_match
+from fuzzy_address_matcher.matcher_funcs import fuzzy_address_match
 ```
+
+### Example input files
+
+- If you cloned the repo, the example CSVs are at `example_data/`.
+- If you installed from PyPI, the same example CSVs are bundled inside the installed package at `fuzzy_address_matcher/example_data/` (and the GUI’s **Load London example** button will find them automatically).
 
 ### 1) Match using external CSV files
 
 Pass file paths for your search dataset and reference dataset.
 
 ```python
-from tools.matcher_funcs import fuzzy_address_match
+from fuzzy_address_matcher.matcher_funcs import fuzzy_address_match
 
 final_summary, output_files, estimated_seconds, summary_table_md = fuzzy_address_match(
     in_file="example_data/search_addresses_london.csv",
@@ -66,7 +71,7 @@ print(summary_table_md)
 If your data is already in memory, pass DataFrames directly with `search_df` and `ref_df`.
 
 ```python
-from tools.matcher_funcs import fuzzy_address_match
+from fuzzy_address_matcher.matcher_funcs import fuzzy_address_match
 
 # Assume search_df and ref_df already exist in your Python session.
 final_summary, output_files, estimated_seconds, summary_table_md = fuzzy_address_match(

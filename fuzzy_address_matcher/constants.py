@@ -7,7 +7,7 @@ from typing import List, Type
 import pandas as pd
 from pydantic import BaseModel
 
-from tools.config import (
+from fuzzy_address_matcher.config import (
     MATCHER_CUDA_VISIBLE_DEVICES,
     MODEL_EXTRACT_USE_PROJECT_ROOT,
     N_EPOCHS,
@@ -299,7 +299,7 @@ if USE_NNET_MODEL:
 run_nnet_match = bool(exported_model)
 
 ### ADDRESS MATCHING FUNCTIONS
-# batch_size, ref_batch_size, fuzzy_method, score_cut_off, ref_address_cols, weights, etc. are set in tools/config.py (env-driven).
+# batch_size, ref_batch_size, fuzzy_method, score_cut_off, ref_address_cols, weights, etc. are set in fuzzy_address_matcher/config.py (env-driven).
 
 # Creating Pydantic basemodel class
 

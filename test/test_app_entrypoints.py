@@ -21,6 +21,6 @@ def test_app_module_exposes_gradio_block() -> None:
 
 @pytest.mark.smoke
 def test_console_entrypoint_is_importable() -> None:
-    gradio_app_module = importlib.import_module("tools.gradio_app")
+    gradio_app_module = importlib.import_module("fuzzy_address_matcher.gradio_app")
     assert hasattr(gradio_app_module, "main")
     assert callable(gradio_app_module.main)

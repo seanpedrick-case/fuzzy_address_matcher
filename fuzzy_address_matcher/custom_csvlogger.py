@@ -17,7 +17,12 @@ import botocore
 from gradio import utils
 from gradio_client import utils as client_utils
 
-from tools.config import AWS_ACCESS_KEY, AWS_REGION, AWS_SECRET_KEY, RUN_AWS_FUNCTIONS
+from fuzzy_address_matcher.config import (
+    AWS_ACCESS_KEY,
+    AWS_REGION,
+    AWS_SECRET_KEY,
+    RUN_AWS_FUNCTIONS,
+)
 
 if TYPE_CHECKING:
     from gradio.components import Component
@@ -104,7 +109,7 @@ class CSVLogger_custom(FlaggingCallback):
             self.dataset_filepath = self.flagging_dir / self.dataset_file_name
         elif dataset_files:
             try:
-                from tools.secure_regex_utils import (
+                from fuzzy_address_matcher.secure_regex_utils import (
                     safe_extract_latest_number_from_filename,
                 )
 

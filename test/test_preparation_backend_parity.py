@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from tools.preparation import (
+from fuzzy_address_matcher.preparation import (
     check_no_number_addresses,
     prepare_ref_address,
     prepare_search_address,
