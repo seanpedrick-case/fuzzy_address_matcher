@@ -320,9 +320,11 @@ APP_CONFIG_PATH = get_or_create_env_var(
 
 if APP_CONFIG_PATH:
     if os.path.exists(APP_CONFIG_PATH):
-        print(f"Loading app variables from fuzzy_address_matcher config file {APP_CONFIG_PATH}")
+        print(
+            f"Loading app variables from fuzzy_address_matcher config file {APP_CONFIG_PATH}"
+        )
         load_dotenv(APP_CONFIG_PATH)
-    #else:
+    # else:
     #    print("App config file not found at location:", APP_CONFIG_PATH)
 
 COGNITO_AUTH = convert_string_to_boolean(get_or_create_env_var("COGNITO_AUTH", "False"))
