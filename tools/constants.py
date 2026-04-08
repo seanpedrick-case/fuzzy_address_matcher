@@ -158,7 +158,6 @@ else:
 model_dir_name = os.path.join(ROOT_DIR, "nnet_model", model_stub, model_version)
 
 model_path = os.path.join(model_dir_name, "saved_model.zip")
-print("Model zip path: ", model_path)
 
 exported_model = []
 

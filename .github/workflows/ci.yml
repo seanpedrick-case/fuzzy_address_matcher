@@ -29,10 +29,10 @@ jobs:
           pip install ruff black
 
       - name: Ruff
-        run: ruff check .github/scripts/setup_test_data.py test/test_data_fixtures.py test/test_extract_street_name.py test/test_fuzzy_address_match_fixtures.py test/test_smoke_match.py test/test_integration_match.py
+        run: ruff check app.py tools/gradio_app.py .github/scripts/setup_test_data.py test/test_data_fixtures.py test/test_extract_street_name.py test/test_fuzzy_address_match_fixtures.py test/test_smoke_match.py test/test_app_entrypoints.py test/test_integration_match.py
 
       - name: Black
-        run: black --check .github/scripts/setup_test_data.py test/test_data_fixtures.py test/test_extract_street_name.py test/test_fuzzy_address_match_fixtures.py test/test_smoke_match.py test/test_integration_match.py
+        run: black --check app.py tools/gradio_app.py .github/scripts/setup_test_data.py test/test_data_fixtures.py test/test_extract_street_name.py test/test_fuzzy_address_match_fixtures.py test/test_smoke_match.py test/test_app_entrypoints.py test/test_integration_match.py
 
   test-unit:
     runs-on: ubuntu-latest

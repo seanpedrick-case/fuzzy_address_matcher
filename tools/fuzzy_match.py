@@ -264,7 +264,14 @@ def string_match_by_post_code_multiple(
         search_addresses_list.extend(search_addresses.tolist())
         reference_addresses_list.extend(reference_addresses.tolist())
 
-    out_frame = pd.concat(match_list)
+    _dfs = [m for m in match_list if isinstance(m, pd.DataFrame)]
+    _non_empty_matches = [m for m in _dfs if not m.empty]
+    if not _non_empty_matches:
+        if _dfs:
+            return _dfs[0].iloc[0:0].copy()
+        return pd.DataFrame()
+
+    out_frame = pd.concat(_non_empty_matches, ignore_index=False)
 
     return out_frame
 
@@ -407,9 +414,8 @@ def create_diag_shortlist(
         results_df, results_max_fuzzy_score, how="left", on=matched_col
     )
 
-    diag_shortlist = results_df[
-        (results_df[fuzzy_col] == results_df["max_fuzzy_score"])
-    ]
+    _shortlist_mask = results_df[fuzzy_col] == results_df["max_fuzzy_score"]
+    diag_shortlist = results_df.loc[_shortlist_mask, :].copy()
 
     # Fuzzy match limit for records with no numbers in it is 0.95 or the provided fuzzy_match_limit, whichever is higher
     # diag_shortlist["fuzzy_score_match"] = diag_shortlist[fuzzy_col] >= fuzzy_match_limit
@@ -444,44 +450,58 @@ def create_diag_shortlist(
             (diag_shortlist["no_numbers_in_search_string"]), "fuzzy_score_match"
         ] = False
 
-    diag_shortlist = (
-        diag_shortlist.fillna("")
-        .infer_objects(copy=False)
-        .drop(["number_count_search_string", "no_numbers_in_search_string"], axis=1)
-    )
-
-    # Ensure boolean dtype before logical operations.
-    # fillna("") above can coerce this column to object/str, which breaks `&`.
+    # Avoid filling the entire frame with "" (can silently coerce dtypes and triggers
+    # pandas future downcasting warnings). Instead, normalise booleans explicitly and
+    # fill only object/string-like columns for export friendliness.
     if "fuzzy_score_match" in diag_shortlist.columns:
+        _fsm = diag_shortlist["fuzzy_score_match"]
+        if _fsm.dtype == object:
+            _fsm = _fsm.where(_fsm != "", pd.NA)
         diag_shortlist["fuzzy_score_match"] = (
-            diag_shortlist["fuzzy_score_match"]
-            .replace("", False)
-            .fillna(False)
-            .astype(bool)
+            _fsm.astype("boolean").fillna(False).astype(bool)
         )
 
+    diag_shortlist = diag_shortlist.infer_objects(copy=False)
+
+    _obj_cols = diag_shortlist.select_dtypes(include=["object", "string"]).columns
+    if len(_obj_cols) > 0:
+        diag_shortlist.loc[:, _obj_cols] = diag_shortlist.loc[:, _obj_cols].fillna("")
+
+    diag_shortlist = diag_shortlist.drop(
+        ["number_count_search_string", "no_numbers_in_search_string"], axis=1
+    )
+
     # Following considers full matches to be those that match on property number and flat number, and the postcode is relatively close.
-    # print(diag_shortlist.columns)
-    diag_shortlist["property_number_match"] = (
-        diag_shortlist["property_number_search"]
-        == diag_shortlist["property_number_reference"]
+    # Treat blank-like tokens and missing values as equivalent "no value" for
+    # component-level comparisons.
+    def _equal_or_both_missing(left: pd.Series, right: pd.Series) -> pd.Series:
+        left_n = left.astype("string").str.strip().replace("", pd.NA)
+        right_n = right.astype("string").str.strip().replace("", pd.NA)
+        return (left_n == right_n) | (left_n.isna() & right_n.isna())
+
+    diag_shortlist["property_number_match"] = _equal_or_both_missing(
+        diag_shortlist["property_number_search"],
+        diag_shortlist["property_number_reference"],
     )
-    diag_shortlist["flat_number_match"] = (
-        diag_shortlist["flat_number_search"] == diag_shortlist["flat_number_reference"]
+    diag_shortlist["flat_number_match"] = _equal_or_both_missing(
+        diag_shortlist["flat_number_search"],
+        diag_shortlist["flat_number_reference"],
     )
-    diag_shortlist["room_number_match"] = (
-        diag_shortlist["room_number_search"] == diag_shortlist["room_number_reference"]
+    diag_shortlist["room_number_match"] = _equal_or_both_missing(
+        diag_shortlist["room_number_search"],
+        diag_shortlist["room_number_reference"],
     )
-    diag_shortlist["block_number_match"] = (
-        diag_shortlist["block_number_search"]
-        == diag_shortlist["block_number_reference"]
+    diag_shortlist["block_number_match"] = _equal_or_both_missing(
+        diag_shortlist["block_number_search"],
+        diag_shortlist["block_number_reference"],
     )
-    diag_shortlist["unit_number_match"] = (
-        diag_shortlist["unit_number_search"] == diag_shortlist["unit_number_reference"]
+    diag_shortlist["unit_number_match"] = _equal_or_both_missing(
+        diag_shortlist["unit_number_search"],
+        diag_shortlist["unit_number_reference"],
     )
-    diag_shortlist["house_court_name_match"] = (
-        diag_shortlist["house_court_name_search"]
-        == diag_shortlist["house_court_name_reference"]
+    diag_shortlist["house_court_name_match"] = _equal_or_both_missing(
+        diag_shortlist["house_court_name_search"],
+        diag_shortlist["house_court_name_reference"],
     )
 
     # Full number match is currently considered only a match between property number and flat number
@@ -890,13 +910,12 @@ def create_results_df(
         if col in search_df.columns:
             search_df = search_df.rename(columns={col: f"__search_side_{col}"})
 
-    full_match_series = (
-        match_results_output.get(
-            "full_match", pd.Series(False, index=match_results_output.index)
-        )
-        .fillna(False)
-        .astype(bool)
+    _full_match_raw = match_results_output.get(
+        "full_match", pd.Series(False, index=match_results_output.index)
     )
+    if _full_match_raw.dtype == object:
+        _full_match_raw = _full_match_raw.where(_full_match_raw != "", pd.NA)
+    full_match_series = _full_match_raw.astype("boolean").fillna(False).astype(bool)
     match_results_output_success = match_results_output[full_match_series]
 
     # If you're joining to the original df on index you will need to recreate the index again
@@ -1040,24 +1059,41 @@ def create_results_df(
         "ref_index"
     ].astype(int, errors="ignore")
 
-    # Replace blanks with NA, fix UPRNs
-    results_for_orig_df_join = results_for_orig_df_join.replace(
-        r"^\s*$", np.nan, regex=True
-    )
+    # Replace blank strings with NA only on object/string columns to avoid pandas'
+    # future downcasting warnings on DataFrame-wide `replace`.
+    _obj_cols = results_for_orig_df_join.select_dtypes(
+        include=["object", "string"]
+    ).columns
+    if len(_obj_cols) > 0:
+        for _c in _obj_cols:
+            _s = results_for_orig_df_join[_c]
+            _mask_blank = _s.notna() & _s.astype(str).str.fullmatch(r"\s*", na=False)
+            if _mask_blank.any():
+                results_for_orig_df_join.loc[_mask_blank, _c] = np.nan
 
     present_join = [c for c in new_join_col if c in results_for_orig_df_join.columns]
     if present_join:
-        results_for_orig_df_join[present_join] = (
-            results_for_orig_df_join[present_join]
-            .astype(str)
-            .replace(".0", "", regex=False)
-            .replace("nan", "", regex=False)
+        _pj = results_for_orig_df_join[present_join].astype(str)
+        _pj = _pj.apply(
+            lambda c: c.str.replace(".0", "", regex=False).str.replace(
+                "nan", "", regex=False
+            )
         )
+        results_for_orig_df_join[present_join] = _pj
 
-    # Replace cells with only 'nan' with blank
-    results_for_orig_df_join = results_for_orig_df_join.replace(
-        r"^nan$", "", regex=True
-    )
+    # Replace cells with only 'nan' with blank (object/string columns only)
+    _obj_cols2 = results_for_orig_df_join.select_dtypes(
+        include=["object", "string"]
+    ).columns
+    if len(_obj_cols2) > 0:
+        for _c in _obj_cols2:
+            _s = results_for_orig_df_join[_c]
+            # Keep missing values missing; only normalise literal 'nan' strings.
+            _mask_nan_str = _s.notna() & _s.astype(str).str.fullmatch(
+                r"nan", case=False, na=False
+            )
+            if _mask_nan_str.any():
+                results_for_orig_df_join.loc[_mask_nan_str, _c] = ""
 
     # results_for_orig_df_join.to_csv("results_for_orig_df_join.csv")
 

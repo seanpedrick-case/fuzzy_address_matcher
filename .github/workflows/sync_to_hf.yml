@@ -14,7 +14,23 @@ jobs:
         with:
           fetch-depth: 0
           lfs: true
+      - name: Build Hugging Face README
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          header_path = Path("hf/README_frontmatter.md")
+          readme_path = Path("README.md")
+
+          header = header_path.read_text(encoding="utf-8").rstrip() + "\n\n"
+          body = readme_path.read_text(encoding="utf-8").lstrip()
+
+          readme_path.write_text(header + body, encoding="utf-8")
+          PY
       - name: Push to hub
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: git push https://seanpedrickcase:$HF_TOKEN@huggingface.co/spaces/seanpedrickcase/fuzzy_address_matcher main
+        run: |
+          git add README.md
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" commit -m "chore: prepare README for HF Space"
+          git push --force https://seanpedrickcase:$HF_TOKEN@huggingface.co/spaces/seanpedrickcase/fuzzy_address_matcher HEAD:main
