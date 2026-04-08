@@ -9,7 +9,6 @@ thin wrapper for Hugging Face Spaces and local development.
 from __future__ import annotations
 
 import socket
-import warnings
 from datetime import datetime
 from pathlib import Path
 
@@ -35,6 +34,7 @@ from tools.config import (
     LOG_FILE_NAME,
     SAVE_LOGS_TO_CSV,
     SAVE_LOGS_TO_DYNAMODB,
+    SAVE_OUTPUT_FILES,
     SHOW_EXAMPLES,
     SHOW_FEEDBACK,
     USAGE_LOG_DYNAMODB_TABLE_NAME,
@@ -51,14 +51,6 @@ from tools.helper_functions import (
 )
 from tools.matcher_funcs import fuzzy_address_match
 
-# Remove warnings from print statements
-warnings.filterwarnings("ignore", "This pattern is interpreted as a regular expression")
-warnings.filterwarnings("ignore", "Downcasting behavior")
-warnings.filterwarnings(
-    "ignore", "A value is trying to be set on a copy of a slice from a DataFrame"
-)
-warnings.filterwarnings("ignore")
-
 today = datetime.now().strftime("%d%m%Y")
 today_rev = datetime.now().strftime("%Y%m%d")
 
@@ -68,20 +60,22 @@ def _resolve_example_file(file_name: str) -> Path:
     Resolve example fixture paths across common runtime contexts.
 
     Search order:
-    1) Current working directory (local `python app.py` / dev runs)
-    2) Repository root relative to this module (spaces/container source layout)
+    1) Installed package data under `tools/example_data/` (PyPI / wheel installs)
+    2) Current working directory `example_data/` (local `python app.py` / dev runs)
+    3) Repository root `example_data/` relative to this module (spaces/container source layout)
     """
+    module_pkg_candidate = Path(__file__).resolve().parent / "example_data" / file_name
     cwd_candidate = Path.cwd() / "example_data" / file_name
     module_root_candidate = (
         Path(__file__).resolve().parents[1] / "example_data" / file_name
     )
 
-    for candidate in (cwd_candidate, module_root_candidate):
+    for candidate in (module_pkg_candidate, cwd_candidate, module_root_candidate):
         if candidate.exists():
             return candidate
 
     # Return the first candidate as the default expected location for message/display.
-    return cwd_candidate
+    return module_pkg_candidate
 
 
 EXAMPLE_SEARCH_FILE = _resolve_example_file("search_addresses_london.csv")
@@ -235,6 +229,12 @@ def build_app() -> gr.Blocks:
             value=True,
             render=False,
         )
+        save_output_files = gr.Checkbox(
+            label="Save output CSV files (results/diagnostics/summary)",
+            value=SAVE_OUTPUT_FILES,
+            render=False,
+            visible=False,
+        )
         in_text = gr.Textbox(label="Input a single address as text", render=False)
         in_api = gr.Dropdown(
             label="Choose API type",
@@ -329,6 +329,7 @@ Note that this app is based on UK address data. Matching is unlikely to be 100% 
                 in_colnames.render()
                 in_existing.render()
                 use_postcode_blocker.render()
+                save_output_files.render()
 
             with gr.Accordion("Single address input", open=False):
                 in_text.render()
@@ -427,6 +428,7 @@ Upload a reference file to match against, or alternatively call the Addressbase 
                 in_api_key,
                 use_postcode_blocker,
                 session_output_folder_state,
+                save_output_files,
             ],
             outputs=[
                 output_summary,

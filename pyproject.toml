@@ -13,7 +13,8 @@ authors = [
 maintainers = [
     { name = "Sean Pedrick-Case", email = "spedrickcase@lambeth.gov.uk" },
 ]
-license = { text = "Apache-2.0" }
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 keywords = [
     "address-matching",
     "fuzzy-matching",
@@ -63,6 +64,9 @@ fuzzy-address-matcher = "tools.gradio_app:main"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["tools*"]
+
+[tool.setuptools.package-data]
+tools = ["example_data/*.csv"]
 
 # Configuration for Ruff linter:
 [tool.ruff]

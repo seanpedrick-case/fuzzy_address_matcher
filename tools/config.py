@@ -505,6 +505,13 @@ SAVE_INTERIM_FILES = convert_string_to_boolean(
     get_or_create_env_var("SAVE_INTERIM_FILES", "False")
 )  # If True, save extra interim/checkpoint files during matching
 
+# If True, write the final CSV outputs (results/diagnostics/summary). When False,
+# the matcher still runs and returns text/markdown summaries but does not write
+# the final CSVs to disk (and thus nothing is returned in the Gradio output_file list).
+SAVE_OUTPUT_FILES = convert_string_to_boolean(
+    get_or_create_env_var("SAVE_OUTPUT_FILES", "True")
+)
+
 batch_size = _env_int(
     "MATCHER_BATCH_SIZE", 10000
 )  # Maximum size per batch for the search address rows

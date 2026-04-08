@@ -12,12 +12,68 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
+
+# ---- Pandas compatibility helpers ----
+def _bool_mask(series: pd.Series, *, default: bool = False) -> pd.Series:
+    """
+    Return a strict-boolean mask from a Series that may be bool/object/nullable.
+
+    This avoids pandas FutureWarnings about silent downcasting when using `.fillna(...)`
+    on object dtype columns.
+    """
+    if series is None:
+        return pd.Series([], dtype=bool)
+
+    s = series
+    if not isinstance(s, pd.Series):
+        s = pd.Series(s)
+
+    if s.dtype == object:
+        # Common pattern in this codebase: blank string used as "missing"
+        s = s.where(s != "", pd.NA)
+
+    try:
+        return s.astype("boolean").fillna(default).astype(bool)
+    except (TypeError, ValueError):
+        # Last resort: interpret common truthy strings
+        return (
+            s.astype(str)
+            .str.strip()
+            .str.lower()
+            .isin(("1", "true", "t", "yes", "y"))
+            .fillna(default)
+            .astype(bool)
+        )
+
+
+# ---- Output naming helpers ----
+def _safe_file_id(value: Optional[str], max_len: int = 20) -> str:
+    """
+    Build a filesystem-friendly identifier from a filename-like input.
+    Keeps letters/numbers/underscore/dash, collapses other characters to '_'.
+    """
+    if value is None:
+        return "unknown"
+    s = str(value).strip()
+    if not s:
+        return "unknown"
+    s = os.path.basename(s)
+    for ext in (".csv.gz", ".csv", ".tsv", ".txt", ".parquet", ".xlsx", ".xls"):
+        if s.lower().endswith(ext):
+            s = s[: -len(ext)]
+            break
+    s = re.sub(r"[^A-Za-z0-9_-]+", "_", s)
+    s = re.sub(r"_+", "_", s).strip("_")
+    return (s or "unknown")[:max_len]
+
+
 # API functions
 from tools.addressbase_api_funcs import places_api_query
 from tools.config import (
     MAX_PARALLEL_WORKERS,
     RUN_BATCHES_IN_PARALLEL,
     SAVE_INTERIM_FILES,
+    SAVE_OUTPUT_FILES,
     USE_EXISTING_STANDARDISED_FILES,
     USE_POSTCODE_BLOCKER,
     batch_size,
@@ -227,7 +283,7 @@ def filter_not_matched(
     if "full_match" not in matched_results.columns:
         raise ValueError("full_match not a column in matched_results")
 
-    full_match_series = matched_results["full_match"].fillna(False).astype(bool)
+    full_match_series = _bool_mask(matched_results["full_match"], default=False)
     matched_results_success = matched_results[full_match_series]
 
     # Filter search_df
@@ -1526,6 +1582,7 @@ def fuzzy_address_match(
     in_api_key: Optional[str] = None,
     use_postcode_blocker: bool = USE_POSTCODE_BLOCKER,
     output_folder: Optional[str] = None,
+    save_output_files: bool = SAVE_OUTPUT_FILES,
     run_batches_in_parallel: bool = RUN_BATCHES_IN_PARALLEL,
     max_parallel_workers: Optional[int] = MAX_PARALLEL_WORKERS,
     InitMatch: MatcherClass = InitMatch,
@@ -1573,6 +1630,7 @@ def fuzzy_address_match(
         in_api_key: API key used when `in_api` is provided.
         use_postcode_blocker: If True, apply postcode-based blocking to reduce candidate comparisons.
         output_folder: Optional override for the output folder.
+        save_output_files: If True, save final output CSV files (results/diagnostics/summary).
         run_batches_in_parallel: If True, process batches concurrently using multiple workers.
         max_parallel_workers: Maximum number of parallel workers (only used when parallel batching is enabled).
         InitMatch: Matcher object (or class instance) that carries configuration and intermediate state.
@@ -2072,12 +2130,14 @@ def fuzzy_address_match(
                     batch_n,
                     number_of_batches,
                     use_postcode_blocker=use_postcode_blocker_effective,
+                    write_outputs=SAVE_INTERIM_FILES,
                 )
 
             OutputMatch = combine_two_matches(
                 OutputMatch,
                 BatchMatch_out,
                 "All up to and including batch " + str(batch_n + 1),
+                write_outputs=SAVE_INTERIM_FILES,
             )
 
     if in_api:
@@ -2308,8 +2368,27 @@ def fuzzy_address_match(
     _out_folder = getattr(OutputMatch, "output_folder", None) or output_folder
     if _out_folder and (not _out_folder.endswith(("\\", "/"))):
         _out_folder = _out_folder + os.sep
-    summary_table_name = _out_folder + "summary_" + today_rev + ".csv"
-    summary_table_df.to_csv(summary_table_name, index=False)
+    # Use user-meaningful names when we don't have real filenames (e.g. dataframe/text inputs).
+    _search_name_for_id = getattr(OutputMatch, "file_name", None)
+    if in_text and str(in_text).strip():
+        _search_name_for_id = "single_address"
+    elif (search_df is not None) and (len(in_file) == 0):
+        _search_name_for_id = "search_df"
+
+    _ref_name_for_id = getattr(OutputMatch, "ref_name", None)
+    if in_api:
+        _ref_name_for_id = "api"
+
+    _search_id = _safe_file_id(_search_name_for_id)
+    _ref_id = _safe_file_id(_ref_name_for_id)
+    _run_id = f"{_search_id}_{_ref_id}_{today_rev}"
+
+    # Final output files (these are the only CSVs we always want to write).
+    OutputMatch.results_orig_df_name = _out_folder + f"results_{_run_id}.csv"
+    OutputMatch.match_outputs_name = _out_folder + f"diagnostics_{_run_id}.csv"
+    summary_table_name = _out_folder + f"summary_{_run_id}.csv"
+    if save_output_files:
+        summary_table_df.to_csv(summary_table_name, index=False)
 
     _em_col = None
     if OutputMatch.existing_match_cols:
@@ -2406,23 +2485,26 @@ def fuzzy_address_match(
             OutputMatch.match_results_output["wratio_score"], errors="coerce"
         ).round(2)
 
-    OutputMatch.match_results_output.to_csv(OutputMatch.match_outputs_name, index=None)
-    if essential_results_cols:
-        OutputMatch.results_on_orig_df[essential_results_cols].to_csv(
-            OutputMatch.results_orig_df_name, index=None
+    if save_output_files:
+        OutputMatch.match_results_output.to_csv(
+            OutputMatch.match_outputs_name, index=None
         )
-    else:
-        OutputMatch.results_on_orig_df.to_csv(
-            OutputMatch.results_orig_df_name, index=None
-        )
+        if essential_results_cols:
+            OutputMatch.results_on_orig_df[essential_results_cols].to_csv(
+                OutputMatch.results_orig_df_name, index=None
+            )
+        else:
+            OutputMatch.results_on_orig_df.to_csv(
+                OutputMatch.results_orig_df_name, index=None
+            )
 
-    output_files.extend(
-        [
-            OutputMatch.results_orig_df_name,
-            OutputMatch.match_outputs_name,
-            summary_table_name,
-        ]
-    )
+        output_files.extend(
+            [
+                OutputMatch.results_orig_df_name,
+                OutputMatch.match_outputs_name,
+                summary_table_name,
+            ]
+        )
 
     print("Final matching summary:", final_summary)
     print("Summary table:", summary_table_md)
@@ -2727,10 +2809,8 @@ def run_single_match_batch(
             InitialMatch, FuzzyNotStdMatch, df_name, write_outputs=write_outputs
         )
 
-        full_match_series = (
-            FuzzyNotStdMatch.match_results_output["full_match"]
-            .fillna(False)
-            .astype(bool)
+        full_match_series = _bool_mask(
+            FuzzyNotStdMatch.match_results_output["full_match"], default=False
         )
         if (len(FuzzyNotStdMatch.search_df_not_matched) == 0) | (
             sum(
@@ -3147,8 +3227,8 @@ def full_fuzzy_match(
 
     # If nothing left to match, break
     if not match_results_output.empty:
-        full_match_series = (
-            match_results_output["full_match"].fillna(False).astype(bool)
+        full_match_series = _bool_mask(
+            match_results_output["full_match"], default=False
         )
 
     if (not match_results_output.empty) and (
@@ -3696,10 +3776,10 @@ def combine_dfs_and_remove_dups(
     # (0) before matcher (1). drop_duplicates(keep="last") then keeps the matcher row when both
     # exist, and the matched row when match flags differ.
     m_series = combined_std_not_matches[match_address_series]
-    if np.issubdtype(m_series.dtype, np.number):
+    if pd.api.types.is_bool_dtype(m_series.dtype):
+        m_bool = _bool_mask(m_series, default=False)
+    elif pd.api.types.is_numeric_dtype(m_series.dtype):
         m_bool = m_series.fillna(0).astype(bool)
-    elif m_series.dtype == bool or str(m_series.dtype) == "boolean":
-        m_bool = m_series.fillna(False).astype(bool)
     else:
         m_bool = m_series.astype(str).str.lower().isin(("1", "true", "t", "yes"))
     combined_std_not_matches["_match_sort"] = m_bool
@@ -3751,10 +3831,9 @@ def combine_two_matches(
     # Filter out search results where a match was found
     NewMatchClass.pre_filter_search_df = NewMatchClass.results_on_orig_df
 
-    matched_mask = (
-        NewMatchClass.results_on_orig_df["Matched with reference address"]
-        .fillna(False)
-        .astype(bool)
+    matched_mask = _bool_mask(
+        NewMatchClass.results_on_orig_df["Matched with reference address"],
+        default=False,
     )
 
     # Normalise key values to integers where possible.
@@ -4002,7 +4081,7 @@ def create_match_summary(match_results_output: PandasDataFrame, df_name: str) ->
     ):
         return f"For the {df_name} dataset (0 records), the fuzzy matching algorithm successfully matched 0 records (0%). The algorithm could not attempt to match 0 records (0%). There are 0 records left to potentially match."
 
-    full_match_series = match_results_output["full_match"].fillna(False).astype(bool)
+    full_match_series = _bool_mask(match_results_output["full_match"], default=False)
 
     """ Create a summary paragraph """
     full_match_count = int(full_match_series.sum())
@@ -4066,10 +4145,10 @@ def build_run_summary_text(
     all_total = int(len(out))
     excluded_total = int(all_total - eligible_total)
     matched_total = int(
-        out.loc[eligible_mask, "Matched with reference address"]
-        .fillna(False)
-        .astype(bool)
-        .sum()
+        _bool_mask(
+            out.loc[eligible_mask, "Matched with reference address"],
+            default=False,
+        ).sum()
     )
     eligible_unmatched = int(eligible_total - matched_total)
 
@@ -4107,11 +4186,11 @@ def build_run_summary_text(
                 [key_field, "match_method", "standardised_address", "full_match"]
             ].copy()
             diag_stage[key_field] = diag_stage[key_field].astype(str)
-            diag_stage["full_match"] = (
-                diag_stage["full_match"].fillna(False).astype(bool)
+            diag_stage["full_match"] = _bool_mask(
+                diag_stage["full_match"], default=False
             )
-            diag_stage["standardised_address"] = (
-                diag_stage["standardised_address"].fillna(False).astype(bool)
+            diag_stage["standardised_address"] = _bool_mask(
+                diag_stage["standardised_address"], default=False
             )
             diag_stage = diag_stage[diag_stage[key_field].isin(eligible_keys)]
 
