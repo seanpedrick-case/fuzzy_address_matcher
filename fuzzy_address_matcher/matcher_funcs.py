@@ -47,10 +47,11 @@ def _bool_mask(series: pd.Series, *, default: bool = False) -> pd.Series:
 
 
 # ---- Output naming helpers ----
-def _safe_file_id(value: Optional[str], max_len: int = 20) -> str:
+def _safe_file_id(value: Optional[str], max_len: int = 40) -> str:
     """
     Build a filesystem-friendly identifier from a filename-like input.
     Keeps letters/numbers/underscore/dash, collapses other characters to '_'.
+    Truncates to ``max_len`` characters (default 40) to reduce collisions between runs.
     """
     if value is None:
         return "unknown"
