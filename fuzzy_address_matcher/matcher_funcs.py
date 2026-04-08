@@ -193,17 +193,21 @@ def _safe_file_stem(name: str, default: str) -> str:
     return stem
 
 
-def _stand_cache_path(output_folder: str, input_name: str, stand_kind: str) -> str:
+def _stand_cache_path(
+    output_folder: str, input_name: str, stand_kind: str, blocker_mode: str
+) -> str:
     """
     input_name: original input file name (or a descriptive label like 'API').
     stand_kind: 'stand_min' or 'stand_full'.
-    Produces <output_folder>/<input_stem>_<stand_kind>.parquet
+    blocker_mode: 'postcode' or 'street' (cache isolation by match mode).
+    Produces <output_folder>/<input_stem>_<stand_kind>_<blocker_mode>.parquet
     """
     stem = _safe_file_stem(input_name, default="data")
     out_dir = output_folder or ""
     if out_dir and not out_dir.endswith((os.sep, "/")):
         out_dir = out_dir + os.sep
-    return os.path.join(out_dir, f"{stem}_{stand_kind}.parquet")
+    mode = _safe_file_stem(blocker_mode, default="postcode")
+    return os.path.join(out_dir, f"{stem}_{stand_kind}_{mode}.parquet")
 
 
 def _standardise_search_df(
@@ -1913,8 +1917,13 @@ def fuzzy_address_match(
     progress(0.1, desc="Performing minimal standardisation")
 
     _stand_out = getattr(InitMatch, "output_folder", None) or output_folder
-    _path_min_s = _stand_cache_path(_stand_out, InitMatch.file_name, "stand_min")
-    _path_min_r = _stand_cache_path(_stand_out, InitMatch.ref_name, "stand_min")
+    _cache_mode = "postcode" if use_postcode_blocker else "street"
+    _path_min_s = _stand_cache_path(
+        _stand_out, InitMatch.file_name, "stand_min", _cache_mode
+    )
+    _path_min_r = _stand_cache_path(
+        _stand_out, InitMatch.ref_name, "stand_min", _cache_mode
+    )
 
     def _cache_is_compatible(
         cached_df: pd.DataFrame,
@@ -2063,8 +2072,12 @@ def fuzzy_address_match(
 
     # Standardise - full
     tic = time.perf_counter()
-    _path_full_s = _stand_cache_path(_stand_out, InitMatch.file_name, "stand_full")
-    _path_full_r = _stand_cache_path(_stand_out, InitMatch.ref_name, "stand_full")
+    _path_full_s = _stand_cache_path(
+        _stand_out, InitMatch.file_name, "stand_full", _cache_mode
+    )
+    _path_full_r = _stand_cache_path(
+        _stand_out, InitMatch.ref_name, "stand_full", _cache_mode
+    )
 
     _loaded_full_s = False
     if USE_EXISTING_STANDARDISED_FILES and os.path.isfile(_path_full_s):
