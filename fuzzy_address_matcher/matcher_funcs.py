@@ -1922,6 +1922,7 @@ def fuzzy_address_match(
         *,
         key_col: str,
         required_col: str,
+        compare_cols: Optional[List[str]] = None,
     ) -> bool:
         """
         Validate that a cached standardisation frame matches the current run.
@@ -1930,6 +1931,8 @@ def fuzzy_address_match(
         - required_col exists (e.g. search_address_stand/ref_address_stand)
         - key_col exists (e.g. index/ref_index)
         - key set matches (prevents reusing cache from a different input)
+        - if compare_cols are available on both frames, a key-sorted value signature
+          also matches (guards against stale cache with same key set)
         """
         if (
             cached_df is None
@@ -1945,9 +1948,46 @@ def fuzzy_address_match(
         if key_col not in expected_df.columns:
             return False
 
+        # Reject non-unique keys to avoid many-to-many ambiguities.
+        if cached_df[key_col].astype(str).duplicated().any():
+            return False
+        if expected_df[key_col].astype(str).duplicated().any():
+            return False
+
         cached_keys = set(cached_df[key_col].astype(str).tolist())
         expected_keys = set(expected_df[key_col].astype(str).tolist())
-        return cached_keys == expected_keys
+        if cached_keys != expected_keys:
+            return False
+
+        if compare_cols:
+            # Compare a deterministic signature over key-sorted value tuples for
+            # whichever columns are present on both sides.
+            cols_present = [
+                c
+                for c in compare_cols
+                if (c in cached_df.columns) and (c in expected_df.columns)
+            ]
+            if cols_present:
+                lhs = (
+                    expected_df[[key_col] + cols_present]
+                    .copy()
+                    .assign(**{key_col: expected_df[key_col].astype(str)})
+                    .sort_values(by=[key_col], kind="stable")
+                    .fillna("")
+                    .astype(str)
+                )
+                rhs = (
+                    cached_df[[key_col] + cols_present]
+                    .copy()
+                    .assign(**{key_col: cached_df[key_col].astype(str)})
+                    .sort_values(by=[key_col], kind="stable")
+                    .fillna("")
+                    .astype(str)
+                )
+                if not lhs.equals(rhs):
+                    return False
+
+        return True
 
     _loaded_min_s = False
     if USE_EXISTING_STANDARDISED_FILES and os.path.isfile(_path_min_s):
@@ -1962,6 +2002,7 @@ def fuzzy_address_match(
             InitMatch.search_df_cleaned,
             key_col=InitMatch.search_df_key_field,
             required_col="search_address_stand",
+            compare_cols=["full_address", "postcode"],
         ):
             InitMatch.search_df_after_stand = cached
             _loaded_min_s = True
@@ -1991,6 +2032,7 @@ def fuzzy_address_match(
             InitMatch.ref_df_cleaned,
             key_col="ref_index",
             required_col="ref_address_stand",
+            compare_cols=["fulladdress", "Postcode"],
         ):
             InitMatch.ref_df_after_stand = cached
             _loaded_min_r = True
@@ -2037,6 +2079,7 @@ def fuzzy_address_match(
             InitMatch.search_df_cleaned,
             key_col=InitMatch.search_df_key_field,
             required_col="search_address_stand",
+            compare_cols=["full_address", "postcode"],
         ):
             InitMatch.search_df_after_full_stand = cached
             _loaded_full_s = True
@@ -2066,6 +2109,7 @@ def fuzzy_address_match(
             InitMatch.ref_df_cleaned,
             key_col="ref_index",
             required_col="ref_address_stand",
+            compare_cols=["fulladdress", "Postcode"],
         ):
             InitMatch.ref_df_after_full_stand = cached
             _loaded_full_r = True
@@ -4110,23 +4154,35 @@ def combine_two_matches(
         .str.strip()
     )
 
-    match_results_output_match_score_is_0 = NewMatchClass.match_results_output[
-        NewMatchClass.match_results_output["fuzzy_score"] == 0.0
-    ][["index", "fuzzy_score"]].drop_duplicates(subset="index")
-    match_results_output_match_score_is_0["index"] = (
-        match_results_output_match_score_is_0["index"].astype(str)
-    )
-    # NewMatchClass.results_on_orig_df["index"] = NewMatchClass.results_on_orig_df["index"].astype(str)
-    NewMatchClass.results_on_orig_df = NewMatchClass.results_on_orig_df.merge(
-        match_results_output_match_score_is_0, on="index", how="left"
-    )
+    # Some abort/empty-stage paths produce a match_results_output without fuzzy_score.
+    # Guard this enrichment so combine does not fail on batches with no match rows.
+    if (
+        isinstance(NewMatchClass.match_results_output, pd.DataFrame)
+        and ("fuzzy_score" in NewMatchClass.match_results_output.columns)
+        and ("index" in NewMatchClass.match_results_output.columns)
+        and ("index" in NewMatchClass.results_on_orig_df.columns)
+    ):
+        match_results_output_match_score_is_0 = NewMatchClass.match_results_output[
+            NewMatchClass.match_results_output["fuzzy_score"] == 0.0
+        ][["index", "fuzzy_score"]].drop_duplicates(subset="index")
+        match_results_output_match_score_is_0["index"] = (
+            match_results_output_match_score_is_0["index"].astype(str)
+        )
+        # NewMatchClass.results_on_orig_df["index"] = NewMatchClass.results_on_orig_df["index"].astype(str)
+        NewMatchClass.results_on_orig_df["index"] = NewMatchClass.results_on_orig_df[
+            "index"
+        ].astype(str)
+        NewMatchClass.results_on_orig_df = NewMatchClass.results_on_orig_df.merge(
+            match_results_output_match_score_is_0, on="index", how="left"
+        )
 
-    NewMatchClass.results_on_orig_df.loc[
-        NewMatchClass.results_on_orig_df["fuzzy_score"] == 0.0, "Excluded from search"
-    ] = "Match score is 0"
-    NewMatchClass.results_on_orig_df = NewMatchClass.results_on_orig_df.drop(
-        "fuzzy_score", axis=1
-    )
+        NewMatchClass.results_on_orig_df.loc[
+            NewMatchClass.results_on_orig_df["fuzzy_score"] == 0.0,
+            "Excluded from search",
+        ] = "Match score is 0"
+        NewMatchClass.results_on_orig_df = NewMatchClass.results_on_orig_df.drop(
+            "fuzzy_score", axis=1
+        )
 
     # Drop any duplicates, prioritise any matches
     NewMatchClass.results_on_orig_df["index"] = NewMatchClass.results_on_orig_df[
