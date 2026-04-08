@@ -224,16 +224,34 @@ def _add_postcode_column(df: PandasDataFrame, postcodes: str):
     if isinstance(postcodes, list):
         postcodes = postcodes[0]
 
-    if postcodes != "full_address_postcode":
-        df = df.rename(columns={postcodes: "postcode"})
+    # Helper: normalise a postcode-like series to strings with blanks for missing
+    def _norm_pc(s: pd.Series) -> pd.Series:
+        return s.fillna("").astype(str).str.strip()
+
+    if postcodes == "full_address_postcode":
+        # Extract postcode from full address text into the same column name, then treat
+        # it as the candidate postcode series.
+        df["full_address_postcode"] = extract_postcode(df, "full_address_postcode")[0]
+        candidate = _norm_pc(df["full_address_postcode"])
+        source_col = "full_address_postcode"
     else:
-        # print(df["full_address_postcode"])
-        # print(extract_postcode(df,"full_address_postcode"))
-        df["full_address_postcode"] = extract_postcode(df, "full_address_postcode")[
-            0
-        ]  #
-        df = df.rename(columns={postcodes: "postcode"})
-        # print(df)
+        if postcodes not in df.columns:
+            return df
+        candidate = _norm_pc(df[postcodes])
+        source_col = postcodes
+
+    # Avoid creating duplicate column names ("postcode" already exists in some inputs).
+    if "postcode" in df.columns:
+        existing = _norm_pc(df["postcode"])
+        use_existing = existing.ne("")
+        df["postcode"] = existing.where(use_existing, candidate)
+        # Drop the source column if it's not the canonical postcode column.
+        if source_col != "postcode" and source_col in df.columns:
+            df = df.drop(columns=[source_col])
+    else:
+        df["postcode"] = candidate
+        if source_col != "postcode" and source_col in df.columns:
+            df = df.drop(columns=[source_col])
 
     return df
 
@@ -341,6 +359,35 @@ def prepare_ref_address(
     ref_df_cleaned = ref_df.copy()
 
     ref_df_cleaned["ref_index"] = ref_df_cleaned.index
+
+    # --- Postcode column normalisation ---
+    # Prevent duplicate postcode column names from propagating downstream (which can
+    # make df["Postcode"] return a DataFrame and break `.str` operations).
+    #
+    # Canonical reference postcode column name in this codebase is "Postcode".
+    if (
+        "Postcode" not in ref_df_cleaned.columns
+        and "postcode" in ref_df_cleaned.columns
+    ):
+        ref_df_cleaned = ref_df_cleaned.rename(columns={"postcode": "Postcode"})
+
+    # If both exist, prefer non-blank values in "Postcode" and fill from "postcode".
+    if "Postcode" in ref_df_cleaned.columns and "postcode" in ref_df_cleaned.columns:
+        _pc_main = ref_df_cleaned["Postcode"].fillna("").astype(str).str.strip()
+        _pc_alt = ref_df_cleaned["postcode"].fillna("").astype(str).str.strip()
+        ref_df_cleaned["Postcode"] = _pc_main.where(_pc_main.ne(""), _pc_alt)
+        ref_df_cleaned = ref_df_cleaned.drop(columns=["postcode"])
+
+    # If there are duplicated "Postcode" columns (possible after merges), keep the first.
+    if (
+        hasattr(ref_df_cleaned.columns, "duplicated")
+        and ref_df_cleaned.columns.duplicated().any()
+    ):
+        dup_names = ref_df_cleaned.columns[ref_df_cleaned.columns.duplicated()].tolist()
+        if "Postcode" in dup_names:
+            ref_df_cleaned = ref_df_cleaned.loc[
+                :, ~ref_df_cleaned.columns.duplicated()
+            ].copy()
 
     # In on-prem LPI db street has been excluded, so put this back in
     if ("Street" not in ref_df_cleaned.columns) & (
