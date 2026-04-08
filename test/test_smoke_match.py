@@ -7,10 +7,26 @@ from pandas.errors import SettingWithCopyWarning
 
 from tools.matcher_funcs import fuzzy_address_match
 
-# Example fixtures are bundled with the package under tools/example_data/.
-TOOLS_ROOT = Path(__file__).resolve().parents[1] / "tools"
-SEARCH_PATH = TOOLS_ROOT / "example_data" / "search_addresses_london.csv"
-REFERENCE_PATH = TOOLS_ROOT / "example_data" / "reference_addresses_london.csv"
+
+def _resolve_example_file(file_name: str) -> Path:
+    """
+    Resolve example fixture paths across common runtime contexts:
+    - installed package data under `tools/example_data/`
+    - repo root `example_data/`
+    """
+    repo_root = Path(__file__).resolve().parents[1]
+    candidates = [
+        repo_root / "tools" / "example_data" / file_name,
+        repo_root / "example_data" / file_name,
+    ]
+    for c in candidates:
+        if c.exists():
+            return c
+    return candidates[0]
+
+
+SEARCH_PATH = _resolve_example_file("search_addresses_london.csv")
+REFERENCE_PATH = _resolve_example_file("reference_addresses_london.csv")
 
 
 @pytest.mark.smoke
