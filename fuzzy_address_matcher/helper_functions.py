@@ -69,11 +69,14 @@ def initial_data_load(in_file):
 
     file_list = [string.name for string in in_file]
 
+    # Keep this predicate aligned with matcher_funcs.load_match_data_and_filter.
     data_file_names = [
-        string for string in file_list if "results_on_orig" not in string.lower()
+        string for string in file_list if "results_" not in string.lower()
     ]
     # Get the list of file names after last slash in paths
-    data_file_names_end = [os.path.basename(string) for string in data_file_names][0]
+    data_file_names_end = (
+        os.path.basename(data_file_names[0]) if data_file_names else ""
+    )
 
     if data_file_names:
         df = read_file(data_file_names[0])
@@ -89,7 +92,7 @@ def initial_data_load(in_file):
         )
 
     results_file_names = [
-        string for string in file_list if "results_on_orig" in string.lower()
+        string for string in file_list if "results_" in string.lower()
     ]
     if results_file_names:
         results_df = read_file(results_file_names[0])

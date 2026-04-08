@@ -85,7 +85,7 @@ pip install -e .
 python app.py
 ```
 
-Further details on use can be found in the [User guide (GitHub Pages)](https://seanpedrick-case.github.io/fuzzy_address_matcher/src/user_guide.html) (source: [`src/user_guide.qmd`](src/user_guide.qmd)).
+Further details on use can be found in the [User guide (GitHub Pages)](https://seanpedrick-case.github.io/fuzzy_address_matcher/src/user_guide.html).
 
 # Introduction 
 Match single or multiple addresses to a reference / canonical dataset. The tool can accept CSV, XLSX (with one sheet), and Parquet files. After you have chosen a reference file, an address match file, and specified its address columns, click 'Match addresses' to run the tool.
@@ -106,7 +106,7 @@ My suggested workflow would be:
 1. Match your datasets with the uk_address_matcher package, then 
 2. Run the output file through this app for further address matches that can be picked up by the standardisation / fuzzy matching
 
-Further details on use can be found in the [User guide](src/user_guide.qmd).
+Further details on use can be found in the [User guide](https://seanpedrick-case.github.io/fuzzy_address_matcher/src/user_guide.html).
 
 
 
