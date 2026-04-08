@@ -1155,7 +1155,11 @@ def load_match_data_and_filter(
         data_file_names = [
             string for string in file_list if "results_" not in string.lower()
         ]
-
+        if not data_file_names:
+            raise ValueError(
+                "No search data file found after excluding results files. "
+                "Please provide at least one non-results input file."
+            )
         Matcher.file_name = get_file_name(data_file_names[0])
 
         # search_df makes column to use as index
@@ -1165,9 +1169,25 @@ def load_match_data_and_filter(
     if not results_data_state.empty:
 
         print("Joining on previous results file")
-        Matcher.results_on_orig_df = results_data_state.copy()
+        _results_state = results_data_state.copy()
+        if "index" in _results_state.columns:
+            # Normalise key dtype and enforce one row per key to avoid many-to-many
+            # row multiplication when merging prior results onto current search data.
+            Matcher.search_df["index"] = Matcher.search_df["index"].astype(str)
+            _results_state["index"] = _results_state["index"].astype(str)
+            _dup_count = int(_results_state.duplicated(subset=["index"]).sum())
+            if _dup_count > 0:
+                print(
+                    f"Prior results file has {_dup_count} duplicate index values; "
+                    "collapsing to last occurrence per index before merge."
+                )
+                _results_state = _results_state.drop_duplicates(
+                    subset=["index"], keep="last"
+                )
+
+        Matcher.results_on_orig_df = _results_state.copy()
         Matcher.search_df = Matcher.search_df.merge(
-            results_data_state, on="index", how="left"
+            _results_state, on="index", how="left"
         )
 
     # If no join on column suggested, assume the user wants the UPRN
@@ -1896,17 +1916,60 @@ def fuzzy_address_match(
     _path_min_s = _stand_cache_path(_stand_out, InitMatch.file_name, "stand_min")
     _path_min_r = _stand_cache_path(_stand_out, InitMatch.ref_name, "stand_min")
 
+    def _cache_is_compatible(
+        cached_df: pd.DataFrame,
+        expected_df: pd.DataFrame,
+        *,
+        key_col: str,
+        required_col: str,
+    ) -> bool:
+        """
+        Validate that a cached standardisation frame matches the current run.
+
+        We require:
+        - required_col exists (e.g. search_address_stand/ref_address_stand)
+        - key_col exists (e.g. index/ref_index)
+        - key set matches (prevents reusing cache from a different input)
+        """
+        if (
+            cached_df is None
+            or cached_df.empty
+            or expected_df is None
+            or expected_df.empty
+        ):
+            return False
+        if required_col not in cached_df.columns:
+            return False
+        if key_col not in cached_df.columns:
+            return False
+        if key_col not in expected_df.columns:
+            return False
+
+        cached_keys = set(cached_df[key_col].astype(str).tolist())
+        expected_keys = set(expected_df[key_col].astype(str).tolist())
+        return cached_keys == expected_keys
+
     _loaded_min_s = False
     if USE_EXISTING_STANDARDISED_FILES and os.path.isfile(_path_min_s):
-        cached = pd.read_parquet(_path_min_s)
-        if "search_address_stand" in cached.columns:
+        try:
+            cached = pd.read_parquet(_path_min_s)
+        except Exception as e:
+            print(f"Failed to read minimal search cache; rebuilding. ({e})")
+            cached = None
+
+        if (cached is not None) and _cache_is_compatible(
+            cached,
+            InitMatch.search_df_cleaned,
+            key_col=InitMatch.search_df_key_field,
+            required_col="search_address_stand",
+        ):
             InitMatch.search_df_after_stand = cached
             _loaded_min_s = True
             print(f"Loaded minimal search standardisation from cache:\n  {_path_min_s}")
         else:
             print(
-                "Cached minimal search standardisation is missing expected columns; "
-                "rebuilding cache."
+                "Cached minimal search standardisation is missing expected columns or "
+                "does not match current input keys; rebuilding cache."
             )
             _loaded_min_s = False
     if not _loaded_min_s:
@@ -1917,8 +1980,18 @@ def fuzzy_address_match(
 
     _loaded_min_r = False
     if USE_EXISTING_STANDARDISED_FILES and os.path.isfile(_path_min_r):
-        cached = pd.read_parquet(_path_min_r)
-        if "ref_address_stand" in cached.columns:
+        try:
+            cached = pd.read_parquet(_path_min_r)
+        except Exception as e:
+            print(f"Failed to read minimal reference cache; rebuilding. ({e})")
+            cached = None
+
+        if (cached is not None) and _cache_is_compatible(
+            cached,
+            InitMatch.ref_df_cleaned,
+            key_col="ref_index",
+            required_col="ref_address_stand",
+        ):
             InitMatch.ref_df_after_stand = cached
             _loaded_min_r = True
             print(
@@ -1926,8 +1999,8 @@ def fuzzy_address_match(
             )
         else:
             print(
-                "Cached minimal reference standardisation is missing expected columns; "
-                "rebuilding cache."
+                "Cached minimal reference standardisation is missing expected columns or "
+                "does not match current input keys; rebuilding cache."
             )
             _loaded_min_r = False
     if not _loaded_min_r:
@@ -1953,15 +2026,25 @@ def fuzzy_address_match(
 
     _loaded_full_s = False
     if USE_EXISTING_STANDARDISED_FILES and os.path.isfile(_path_full_s):
-        cached = pd.read_parquet(_path_full_s)
-        if "search_address_stand" in cached.columns:
+        try:
+            cached = pd.read_parquet(_path_full_s)
+        except Exception as e:
+            print(f"Failed to read full search cache; rebuilding. ({e})")
+            cached = None
+
+        if (cached is not None) and _cache_is_compatible(
+            cached,
+            InitMatch.search_df_cleaned,
+            key_col=InitMatch.search_df_key_field,
+            required_col="search_address_stand",
+        ):
             InitMatch.search_df_after_full_stand = cached
             _loaded_full_s = True
             print(f"Loaded full search standardisation from cache:\n  {_path_full_s}")
         else:
             print(
-                "Cached full search standardisation is missing expected columns; "
-                "rebuilding cache."
+                "Cached full search standardisation is missing expected columns or "
+                "does not match current input keys; rebuilding cache."
             )
             _loaded_full_s = False
     if not _loaded_full_s:
@@ -1972,8 +2055,18 @@ def fuzzy_address_match(
 
     _loaded_full_r = False
     if USE_EXISTING_STANDARDISED_FILES and os.path.isfile(_path_full_r):
-        cached = pd.read_parquet(_path_full_r)
-        if "ref_address_stand" in cached.columns:
+        try:
+            cached = pd.read_parquet(_path_full_r)
+        except Exception as e:
+            print(f"Failed to read full reference cache; rebuilding. ({e})")
+            cached = None
+
+        if (cached is not None) and _cache_is_compatible(
+            cached,
+            InitMatch.ref_df_cleaned,
+            key_col="ref_index",
+            required_col="ref_address_stand",
+        ):
             InitMatch.ref_df_after_full_stand = cached
             _loaded_full_r = True
             print(
@@ -1981,8 +2074,8 @@ def fuzzy_address_match(
             )
         else:
             print(
-                "Cached full reference standardisation is missing expected columns; "
-                "rebuilding cache."
+                "Cached full reference standardisation is missing expected columns or "
+                "does not match current input keys; rebuilding cache."
             )
             _loaded_full_r = False
     if not _loaded_full_r:
@@ -2390,7 +2483,32 @@ def fuzzy_address_match(
             OutputMatch, "use_postcode_blocker_effective", None
         ),
     )
-    final_summary = final_summary + "\n\n" + time_out
+
+    # Prepend run context for the UI (matched files + columns used).
+    _search_display = (
+        "single_address"
+        if (in_text and str(in_text).strip())
+        else getattr(OutputMatch, "file_name", None)
+    )
+    if (search_df is not None) and (len(in_file) == 0) and (not _search_display):
+        _search_display = "search_df"
+    _ref_display = "api" if in_api else getattr(OutputMatch, "ref_name", None)
+    if not _ref_display:
+        _ref_display = (
+            "reference_df" if (ref_df is not None and len(in_ref) == 0) else "reference"
+        )
+
+    _search_cols = in_colnames or []
+    _ref_cols = in_refcol or []
+    _context_md = (
+        "## Run context\n"
+        f"- **Search input**: `{_search_display}`\n"
+        f"- **Reference input**: `{_ref_display}`\n"
+        f"- **Search address columns**: `{', '.join(map(str, _search_cols))}`\n"
+        f"- **Reference address columns**: `{', '.join(map(str, _ref_cols))}`\n"
+    )
+
+    final_summary = _context_md + "\n" + final_summary + "\n\n" + time_out
 
     estimate_total_processing_time = sum_numbers_before_seconds(time_out)
     print("Estimated total processing time:", str(estimate_total_processing_time))
@@ -2439,6 +2557,45 @@ def fuzzy_address_match(
         OutputMatch.results_on_orig_df,
         _em_col,
     )
+
+    # Defensive de-duplication: in some UI/state paths (especially street-only runs),
+    # upstream merges can occasionally introduce duplicate keys. Ensure the final
+    # results contain at most one row per key.
+    _final_key = (
+        OutputMatch.search_df_key_field
+        if (
+            hasattr(OutputMatch, "search_df_key_field")
+            and isinstance(OutputMatch.search_df_key_field, str)
+            and (
+                OutputMatch.search_df_key_field
+                in OutputMatch.results_on_orig_df.columns
+            )
+        )
+        else ("index" if "index" in OutputMatch.results_on_orig_df.columns else None)
+    )
+    if _final_key is not None:
+        _dup_mask = OutputMatch.results_on_orig_df.duplicated(subset=[_final_key])
+        _dup_count = int(_dup_mask.sum())
+        if _dup_count > 0:
+            print(
+                f"Final results contain {_dup_count} duplicate key rows on "
+                f"{_final_key!r}; collapsing to one row per key."
+            )
+            _sort_cols = [_final_key]
+            _ascending = [True]
+            if (
+                "Matched with reference address"
+                in OutputMatch.results_on_orig_df.columns
+            ):
+                _sort_cols.append("Matched with reference address")
+                _ascending.append(False)
+            OutputMatch.results_on_orig_df = (
+                OutputMatch.results_on_orig_df.sort_values(
+                    by=_sort_cols, ascending=_ascending, kind="stable"
+                )
+                .drop_duplicates(subset=[_final_key], keep="first")
+                .reset_index(drop=True)
+            )
 
     # Also attach the search-side in_existing value onto the diagnostics output so it can be
     # audited alongside match scores/methods. Use the original/pre-filter search df because
@@ -3786,9 +3943,7 @@ def combine_dfs_and_remove_dups(
     orig_df["_combine_source"] = 0
     new_df["_combine_source"] = 1
 
-    combined_std_not_matches = pd.concat(
-        [orig_df, new_df], axis=0
-    )  # , ignore_index=True)
+    combined_std_not_matches = pd.concat([orig_df, new_df], axis=0, ignore_index=True)
 
     # If no results were combined
     if combined_std_not_matches.empty:
@@ -3832,8 +3987,26 @@ def combine_dfs_and_remove_dups(
     combined_std_not_matches_no_dups = combined_std_not_matches.drop_duplicates(
         index_col, keep="last"
     ).drop(columns=["_combine_source", "_match_sort"], errors="ignore")
-
-    combined_std_not_matches_no_dups = combined_std_not_matches_no_dups.sort_index()
+    if index_col in combined_std_not_matches_no_dups.columns:
+        _key_num = pd.to_numeric(
+            combined_std_not_matches_no_dups[index_col], errors="coerce"
+        )
+        if _key_num.notna().any():
+            combined_std_not_matches_no_dups = combined_std_not_matches_no_dups.assign(
+                __key_num=_key_num
+            ).sort_values(by=["__key_num", index_col], kind="stable")
+            combined_std_not_matches_no_dups = combined_std_not_matches_no_dups.drop(
+                columns=["__key_num"], errors="ignore"
+            )
+        else:
+            combined_std_not_matches_no_dups = (
+                combined_std_not_matches_no_dups.sort_values(
+                    by=[index_col], kind="stable"
+                )
+            )
+    combined_std_not_matches_no_dups = combined_std_not_matches_no_dups.reset_index(
+        drop=True
+    )
 
     return combined_std_not_matches_no_dups
 
@@ -3895,27 +4068,33 @@ def combine_two_matches(
         :,
     ]  # .drop(rows_to_drop, axis = 0)
 
-    # Filter out rows from NewMatchClass.search_df_cleaned
+    # Filter out rows from NewMatchClass.search_* dataframes.
+    #
+    # IMPORTANT: do this by key value, not by positional boolean masks.
+    # Cached standardisation frames can legitimately have different row counts
+    # (e.g. cache from a previous run). Positional masks then raise:
+    # "Boolean index has wrong length".
+    _key = NewMatchClass.search_df_key_field
+    _keep_keys = set(
+        NewMatchClass.search_df_not_matched.get(_key, pd.Series(dtype=object))
+        .astype(str)
+        .tolist()
+    )
 
-    _cleaned_keys = pd.to_numeric(
-        NewMatchClass.search_df_cleaned[NewMatchClass.search_df_key_field],
-        errors="coerce",
-    ).astype("Int64")
-    _not_matched_keys = pd.to_numeric(
-        NewMatchClass.search_df_not_matched[NewMatchClass.search_df_key_field],
-        errors="coerce",
-    ).astype("Int64")
-    filtered_rows_to_keep = _cleaned_keys.isin(_not_matched_keys).to_list()
+    def _filter_by_keys(df: pd.DataFrame) -> pd.DataFrame:
+        if df is None or df.empty:
+            return df
+        if _key not in df.columns:
+            return df
+        return df.loc[df[_key].astype(str).isin(_keep_keys), :].copy()
 
-    NewMatchClass.search_df_cleaned = NewMatchClass.search_df_cleaned.loc[
-        filtered_rows_to_keep, :
-    ]  # .drop(rows_to_drop, axis = 0)
-    NewMatchClass.search_df_after_stand = NewMatchClass.search_df_after_stand.loc[
-        filtered_rows_to_keep, :
-    ]  # .drop(rows_to_drop)
-    NewMatchClass.search_df_after_full_stand = (
-        NewMatchClass.search_df_after_full_stand.loc[filtered_rows_to_keep, :]
-    )  # .drop(rows_to_drop)
+    NewMatchClass.search_df_cleaned = _filter_by_keys(NewMatchClass.search_df_cleaned)
+    NewMatchClass.search_df_after_stand = _filter_by_keys(
+        NewMatchClass.search_df_after_stand
+    )
+    NewMatchClass.search_df_after_full_stand = _filter_by_keys(
+        NewMatchClass.search_df_after_full_stand
+    )
 
     ### Create lookup lists
     NewMatchClass.search_df_after_stand_series = (

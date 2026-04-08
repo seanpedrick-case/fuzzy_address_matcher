@@ -70,3 +70,32 @@ def test_smoke_fuzzy_address_match_with_dataframes() -> None:
         f"- {w.category.__name__}: {w.message} ({w.filename}:{w.lineno})"
         for w in pandas_warnings
     )
+
+
+@pytest.mark.smoke
+def test_street_only_outputs_do_not_duplicate_rows() -> None:
+    search_df = pd.read_csv(SEARCH_PATH)
+    reference_df = pd.read_csv(REFERENCE_PATH)
+
+    msg, output_files, estimate_time, _ = fuzzy_address_match(
+        search_df=search_df,
+        ref_df=reference_df,
+        in_colnames=["address_line_1", "address_line_2", "postcode"],
+        in_refcol=["addr1", "addr2", "addr3", "addr4", "postcode"],
+        use_postcode_blocker=False,
+        # Isolate artifacts for this regression check.
+        output_folder=".tmp_street_only_output",
+    )
+
+    assert isinstance(msg, str)
+    assert isinstance(estimate_time, float)
+    assert output_files
+
+    results_candidates = [p for p in output_files if "results_" in str(p)]
+    assert results_candidates, "Expected a results CSV in output_files"
+    results_df = pd.read_csv(results_candidates[0])
+
+    # Street-only mode should still return one row per input record.
+    assert len(results_df) == len(search_df)
+    assert "index" in results_df.columns
+    assert not results_df["index"].duplicated().any()
