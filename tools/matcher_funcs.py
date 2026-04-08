@@ -1614,9 +1614,15 @@ def fuzzy_address_match(
             return value
         return [_FilePathLike(str(value))]
 
-    effective_output_folder = output_folder or output_folder
-    if effective_output_folder and (not effective_output_folder.endswith(("\\", "/"))):
-        effective_output_folder = effective_output_folder + os.sep
+    # Resolve output folder robustly for UI, scripts, and CI.
+    # Priority: explicit `output_folder` arg -> config `output_folder` -> local ./output/
+    effective_output_folder = (
+        output_folder or globals().get("output_folder") or "output"
+    )
+    if not str(effective_output_folder).strip():
+        effective_output_folder = "output"
+    if not str(effective_output_folder).endswith(("\\", "/")):
+        effective_output_folder = str(effective_output_folder) + os.sep
     InitMatch.output_folder = effective_output_folder
 
     def _notify_ui(level: str, message: str) -> None:
@@ -1799,10 +1805,18 @@ def fuzzy_address_match(
 
     _loaded_min_s = False
     if USE_EXISTING_STANDARDISED_FILES and os.path.isfile(_path_min_s):
-        InitMatch.search_df_after_stand = pd.read_parquet(_path_min_s)
-        _loaded_min_s = True
-        print(f"Loaded minimal search standardisation from cache:\n  {_path_min_s}")
-    else:
+        cached = pd.read_parquet(_path_min_s)
+        if "search_address_stand" in cached.columns:
+            InitMatch.search_df_after_stand = cached
+            _loaded_min_s = True
+            print(f"Loaded minimal search standardisation from cache:\n  {_path_min_s}")
+        else:
+            print(
+                "Cached minimal search standardisation is missing expected columns; "
+                "rebuilding cache."
+            )
+            _loaded_min_s = False
+    if not _loaded_min_s:
         InitMatch.search_df_after_stand = _standardise_search_df(
             InitMatch.search_df_cleaned, standardise=False
         )
@@ -1810,10 +1824,20 @@ def fuzzy_address_match(
 
     _loaded_min_r = False
     if USE_EXISTING_STANDARDISED_FILES and os.path.isfile(_path_min_r):
-        InitMatch.ref_df_after_stand = pd.read_parquet(_path_min_r)
-        _loaded_min_r = True
-        print(f"Loaded minimal reference standardisation from cache:\n  {_path_min_r}")
-    else:
+        cached = pd.read_parquet(_path_min_r)
+        if "ref_address_stand" in cached.columns:
+            InitMatch.ref_df_after_stand = cached
+            _loaded_min_r = True
+            print(
+                f"Loaded minimal reference standardisation from cache:\n  {_path_min_r}"
+            )
+        else:
+            print(
+                "Cached minimal reference standardisation is missing expected columns; "
+                "rebuilding cache."
+            )
+            _loaded_min_r = False
+    if not _loaded_min_r:
         InitMatch.ref_df_after_stand = _standardise_ref_df(
             InitMatch.ref_df_cleaned, standardise=False
         )
@@ -1836,10 +1860,18 @@ def fuzzy_address_match(
 
     _loaded_full_s = False
     if USE_EXISTING_STANDARDISED_FILES and os.path.isfile(_path_full_s):
-        InitMatch.search_df_after_full_stand = pd.read_parquet(_path_full_s)
-        _loaded_full_s = True
-        print(f"Loaded full search standardisation from cache:\n  {_path_full_s}")
-    else:
+        cached = pd.read_parquet(_path_full_s)
+        if "search_address_stand" in cached.columns:
+            InitMatch.search_df_after_full_stand = cached
+            _loaded_full_s = True
+            print(f"Loaded full search standardisation from cache:\n  {_path_full_s}")
+        else:
+            print(
+                "Cached full search standardisation is missing expected columns; "
+                "rebuilding cache."
+            )
+            _loaded_full_s = False
+    if not _loaded_full_s:
         InitMatch.search_df_after_full_stand = _standardise_search_df(
             InitMatch.search_df_cleaned, standardise=True
         )
@@ -1847,10 +1879,20 @@ def fuzzy_address_match(
 
     _loaded_full_r = False
     if USE_EXISTING_STANDARDISED_FILES and os.path.isfile(_path_full_r):
-        InitMatch.ref_df_after_full_stand = pd.read_parquet(_path_full_r)
-        _loaded_full_r = True
-        print(f"Loaded full reference standardisation from cache:\n  {_path_full_r}")
-    else:
+        cached = pd.read_parquet(_path_full_r)
+        if "ref_address_stand" in cached.columns:
+            InitMatch.ref_df_after_full_stand = cached
+            _loaded_full_r = True
+            print(
+                f"Loaded full reference standardisation from cache:\n  {_path_full_r}"
+            )
+        else:
+            print(
+                "Cached full reference standardisation is missing expected columns; "
+                "rebuilding cache."
+            )
+            _loaded_full_r = False
+    if not _loaded_full_r:
         InitMatch.ref_df_after_full_stand = _standardise_ref_df(
             InitMatch.ref_df_cleaned, standardise=True
         )
