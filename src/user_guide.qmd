@@ -7,7 +7,7 @@ format:
     toc-title: "On this page"
 ---
 
-## Overview
+# Overview
 
 The Fuzzy address matcher app compares your search addresses against a reference source and produces match outputs for review.
 
@@ -18,7 +18,89 @@ You can run matching in two ways:
 
 The app is intended for UK address workflows. Where postcodes are used, keep postcode as the last selected address component when possible.
 
-## Before you start
+# Installation
+
+Requires Python 3.10 or newer.
+
+## Installing from pypi
+
+Install the latest release from PyPI:
+
+```bash
+pip install fuzzy_address_matcher
+```
+
+This installation supports both Python-script usage and the GUI console command.
+
+## Use in a Python script
+
+Import the matcher function:
+
+```python
+from tools.matcher_funcs import fuzzy_address_match
+```
+
+### 1) Match using external CSV files
+
+Pass file paths for your search dataset and reference dataset.
+
+```python
+from tools.matcher_funcs import fuzzy_address_match
+
+final_summary, output_files, estimated_seconds, summary_table_md = fuzzy_address_match(
+    in_file="example_data/search_addresses_london.csv",
+    in_ref="example_data/reference_addresses_london.csv",
+    in_colnames=["address_line_1", "address_line_2", "postcode"],
+    in_refcol=["addr1", "addr2", "addr3", "addr4", "postcode"],
+    in_joincol=None,
+    output_folder="outputs",
+)
+
+print(final_summary)
+print(output_files)
+print(summary_table_md)
+```
+
+### 2) Match using DataFrames already loaded in Python
+
+If your data is already in memory, pass DataFrames directly with `search_df` and `ref_df`.
+
+```python
+from tools.matcher_funcs import fuzzy_address_match
+
+# Assume search_df and ref_df already exist in your Python session.
+final_summary, output_files, estimated_seconds, summary_table_md = fuzzy_address_match(
+    search_df=search_df,
+    ref_df=ref_df,
+    in_colnames=["address_line_1", "address_line_2", "postcode"],
+    in_refcol=["addr1", "addr2", "addr3", "addr4", "postcode"],
+    in_joincol=None,
+    output_folder="outputs",
+)
+
+print(final_summary)
+print(output_files)
+print(summary_table_md)
+```
+
+## Run the GUI app
+
+If you installed from PyPI, you can run the GUI via the console script:
+
+```bash
+fuzzy-address-matcher
+```
+
+To run the Gradio GUI app, clone the repo and run it from the project root:
+
+```bash
+git clone https://github.com/seanpedrick-case/fuzzy_address_matcher.git
+cd fuzzy_address_matcher
+pip install -e .
+python app.py
+```
+
+# Before you start
 
 - Prepare a search dataset containing the address fields you want to match.
 - Decide whether your reference source is:
@@ -27,7 +109,7 @@ The app is intended for UK address workflows. Where postcodes are used, keep pos
 - Identify any columns you want to keep as join columns in output.
 - If your search file already contains prior match fields, identify those columns so they can be preserved in results.
 
-## Match workflow in the app
+# Match workflow in the app
 
 1. Upload one or more search files in **Match multiple addresses in a CSV/XLSX/Parquet file**.
 2. Choose search address columns in **Address columns in search data**.

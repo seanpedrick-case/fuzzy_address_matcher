@@ -413,7 +413,7 @@ def query_addressbase_api(
     in_api_key: str,
     Matcher: MatcherClass,
     query_type: str,
-    output_folder_override: Optional[str] = None,
+    output_folder: Optional[str] = None,
     progress=gr.Progress(track_tqdm=True),
 ):
 
@@ -446,7 +446,7 @@ def query_addressbase_api(
 
             return api_folder_path
 
-        base_output_folder = output_folder_override or output_folder
+        base_output_folder = output_folder or output_folder
         if not base_output_folder.endswith(("\\", "/")):
             base_output_folder = base_output_folder + os.sep
 
@@ -838,7 +838,7 @@ def load_ref_data(
     in_api_key: str,
     query_type: str,
     use_postcode_blocker: bool = True,
-    output_folder_override: Optional[str] = None,
+    output_folder: Optional[str] = None,
     progress=gr.Progress(track_tqdm=True),
 ):
     """
@@ -878,7 +878,7 @@ def load_ref_data(
                     in_api_key,
                     Matcher,
                     query_type,
-                    output_folder_override=output_folder_override,
+                    output_folder=output_folder,
                 )
 
         else:
@@ -1398,7 +1398,7 @@ def load_matcher_data(
     in_api: str,
     in_api_key: str,
     use_postcode_blocker: bool = True,
-    output_folder_override: Optional[str] = None,
+    output_folder: Optional[str] = None,
 ) -> tuple:
     """
     Load and preprocess user inputs from the Gradio interface for address matching.
@@ -1435,7 +1435,7 @@ def load_matcher_data(
     # Abort flag for if it's not even possible to attempt the first stage of the match for some reason
     Matcher.abort_flag = False
 
-    effective_output_folder = output_folder_override or output_folder
+    effective_output_folder = output_folder or output_folder
     if effective_output_folder and (not effective_output_folder.endswith(("\\", "/"))):
         effective_output_folder = effective_output_folder + os.sep
     Matcher.output_folder = effective_output_folder
@@ -1452,7 +1452,7 @@ def load_matcher_data(
             in_api_key,
             query_type=in_api,
             use_postcode_blocker=use_postcode_blocker,
-            output_folder_override=effective_output_folder,
+            output_folder=effective_output_folder,
         )
 
     ### MATCH/SEARCH FILES ###
@@ -1481,7 +1481,7 @@ def load_matcher_data(
             in_api_key,
             query_type=in_api,
             use_postcode_blocker=use_postcode_blocker,
-            output_folder_override=effective_output_folder,
+            output_folder=effective_output_folder,
         )
 
     print("Shape of ref_df after filtering is: ", Matcher.ref_df.shape)
@@ -1525,7 +1525,7 @@ def fuzzy_address_match(
     in_api: Optional[str] = None,
     in_api_key: Optional[str] = None,
     use_postcode_blocker: bool = USE_POSTCODE_BLOCKER,
-    output_folder_override: Optional[str] = None,
+    output_folder: Optional[str] = None,
     run_batches_in_parallel: bool = RUN_BATCHES_IN_PARALLEL,
     max_parallel_workers: Optional[int] = MAX_PARALLEL_WORKERS,
     InitMatch: MatcherClass = InitMatch,
@@ -1572,7 +1572,7 @@ def fuzzy_address_match(
         in_api: API mode / query type. If falsy, the reference data is loaded from `in_ref`.
         in_api_key: API key used when `in_api` is provided.
         use_postcode_blocker: If True, apply postcode-based blocking to reduce candidate comparisons.
-        output_folder_override: Optional override for the output folder.
+        output_folder: Optional override for the output folder.
         run_batches_in_parallel: If True, process batches concurrently using multiple workers.
         max_parallel_workers: Maximum number of parallel workers (only used when parallel batching is enabled).
         InitMatch: Matcher object (or class instance) that carries configuration and intermediate state.
@@ -1614,7 +1614,7 @@ def fuzzy_address_match(
             return value
         return [_FilePathLike(str(value))]
 
-    effective_output_folder = output_folder_override or output_folder
+    effective_output_folder = output_folder or output_folder
     if effective_output_folder and (not effective_output_folder.endswith(("\\", "/"))):
         effective_output_folder = effective_output_folder + os.sep
     InitMatch.output_folder = effective_output_folder
@@ -1736,7 +1736,7 @@ def fuzzy_address_match(
         in_api,
         in_api_key,
         use_postcode_blocker=use_postcode_blocker,
-        output_folder_override=effective_output_folder,
+        output_folder=effective_output_folder,
     )
 
     if final_api_output_file_name:
