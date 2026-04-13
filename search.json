@@ -7,53 +7,46 @@
     "text": "The Fuzzy address matcher app compares your search addresses against a reference source and produces match outputs for review.\nYou can run matching in two ways:\n\nBatch mode using uploaded files (CSV, XLSX, or Parquet).\nSingle-address mode using a text input.\n\nThe app is intended for UK address workflows. Where postcodes are used, keep postcode as the last selected address component when possible."
   },
   {
-    "objectID": "src/user_guide.html#overview",
-    "href": "src/user_guide.html#overview",
+    "objectID": "src/user_guide.html#installing-from-pypi",
+    "href": "src/user_guide.html#installing-from-pypi",
     "title": "User guide",
-    "section": "",
-    "text": "The Fuzzy address matcher app compares your search addresses against a reference source and produces match outputs for review.\nYou can run matching in two ways:\n\nBatch mode using uploaded files (CSV, XLSX, or Parquet).\nSingle-address mode using a text input.\n\nThe app is intended for UK address workflows. Where postcodes are used, keep postcode as the last selected address component when possible."
+    "section": "Installing from pypi",
+    "text": "Installing from pypi\nInstall the latest release from PyPI:\npip install fuzzy_address_matcher\nThis installation supports both Python-script usage and the GUI console command."
   },
   {
-    "objectID": "src/user_guide.html#before-you-start",
-    "href": "src/user_guide.html#before-you-start",
+    "objectID": "src/user_guide.html#use-in-a-python-script",
+    "href": "src/user_guide.html#use-in-a-python-script",
     "title": "User guide",
-    "section": "Before you start",
-    "text": "Before you start\n\nPrepare a search dataset containing the address fields you want to match.\nDecide whether your reference source is:\n\nA reference file upload, or\nThe AddressBase API.\n\nIdentify any columns you want to keep as join columns in output.\nIf your search file already contains prior match fields, identify those columns so they can be preserved in results."
+    "section": "Use in a Python script",
+    "text": "Use in a Python script\nImport the matcher function:\nfrom fuzzy_address_matcher.matcher_funcs import fuzzy_address_match\n\nExample input files\n\nIf you cloned the repo, the example CSVs are at example_data/.\nIf you installed from PyPI, the same example CSVs are bundled inside the installed package at fuzzy_address_matcher/example_data/ (and the GUI’s Load London example button will find them automatically).\n\n\n\n1) Match using external CSV files\nPass file paths for your search dataset and reference dataset.\nfrom fuzzy_address_matcher.matcher_funcs import fuzzy_address_match\n\nfinal_summary, output_files, estimated_seconds, summary_table_md = fuzzy_address_match(\n    in_file=\"example_data/search_addresses_london.csv\",\n    in_ref=\"example_data/reference_addresses_london.csv\",\n    in_colnames=[\"address_line_1\", \"address_line_2\", \"postcode\"],\n    in_refcol=[\"addr1\", \"addr2\", \"addr3\", \"addr4\", \"postcode\"],\n    in_joincol=None,\n    output_folder=\"outputs\",\n)\n\nprint(final_summary)\nprint(output_files)\nprint(summary_table_md)\n\n\n2) Match using DataFrames already loaded in Python\nIf your data is already in memory, pass DataFrames directly with search_df and ref_df.\nfrom fuzzy_address_matcher.matcher_funcs import fuzzy_address_match\n\n# Assume search_df and ref_df already exist in your Python session.\nfinal_summary, output_files, estimated_seconds, summary_table_md = fuzzy_address_match(\n    search_df=search_df,\n    ref_df=ref_df,\n    in_colnames=[\"address_line_1\", \"address_line_2\", \"postcode\"],\n    in_refcol=[\"addr1\", \"addr2\", \"addr3\", \"addr4\", \"postcode\"],\n    in_joincol=None,\n    output_folder=\"outputs\",\n)\n\nprint(final_summary)\nprint(output_files)\nprint(summary_table_md)\n\n\nAdvanced fuzzy_address_match parameters\nThe Gradio app only passes a subset of arguments. From Python you can also control, for example:\n\nprint_match_stage_summary_to_console, run_batches_in_parallel, max_parallel_workers\nsearch_df, ref_df, and results_df instead of file uploads\nInitMatch and progress for custom matcher state or Gradio progress reporting\n\nSee the docstring on fuzzy_address_match in fuzzy_address_matcher/matcher_funcs.py for the full signature and behaviour."
   },
   {
-    "objectID": "src/user_guide.html#match-workflow-in-the-app",
-    "href": "src/user_guide.html#match-workflow-in-the-app",
+    "objectID": "src/user_guide.html#run-the-gui-app",
+    "href": "src/user_guide.html#run-the-gui-app",
     "title": "User guide",
-    "section": "Match workflow in the app",
-    "text": "Match workflow in the app\n\nUpload one or more search files in Match multiple addresses in a CSV/XLSX/Parquet file.\nChoose search address columns in Address columns in search data.\nOptionally choose Columns indicating existing address matches.\nOptionally enable Use postcode blocker.\nOptionally provide Single address input for one-off matching.\nChoose a reference route:\n\nUse Addressbase API and provide API mode/key, or\nUpload a reference file.\n\nFor reference-file matching, choose:\n\nReference address columns\nReference join columns\n\nClick Match addresses.\nReview:\n\nSummary text\nDownloadable output files\nSummary table markdown"
+    "section": "Run the GUI app",
+    "text": "Run the GUI app\nIf you installed from PyPI, you can run the GUI via the console script:\nfuzzy-address-matcher\nTo run the Gradio GUI app, clone the repo and run it from the project root:\ngit clone https://github.com/seanpedrick-case/fuzzy_address_matcher.git\ncd fuzzy_address_matcher\npip install -e .\npython app.py"
   },
   {
-    "objectID": "src/user_guide.html#input-reference-fuzzy_address_match",
-    "href": "src/user_guide.html#input-reference-fuzzy_address_match",
+    "objectID": "src/user_guide.html#address-standardisation",
+    "href": "src/user_guide.html#address-standardisation",
     "title": "User guide",
-    "section": "Input reference (fuzzy_address_match)",
-    "text": "Input reference (fuzzy_address_match)\nThe app calls fuzzy_address_match(...) with these user-facing inputs.\n\nSearch inputs\n\nin_file: uploaded search file(s).\nin_text: optional single address text.\nin_colnames: selected search address columns.\nin_existing: optional existing match columns to preserve.\n\n\n\nReference inputs\n\nin_ref: uploaded reference file(s).\nin_refcol: selected reference address columns.\nin_joincol: reference columns to keep in output.\n\n\n\nAPI inputs\n\nin_api: API route option (for example postcode-based mode).\nin_api_key: API key used for AddressBase access.\n\n\n\nMatching behavior inputs\n\nuse_postcode_blocker: prefer postcode-based blocking when possible."
+    "section": "Address standardisation",
+    "text": "Address standardisation\nStandardisation is controlled by STANDARDISE_ADDRESS. The pipeline uses two layers in code: standardise_wrapper_func and standardise_address.\nWrapper (standardise_wrapper_func). Search and reference rows get working columns derived from the concatenated address and postcode: text is lowercased and trimmed, and postcode_search is normalised for blocking by removing internal whitespace so variants like SW1A 1AA and sw1a1aa align. Rows excluded as non-postal can have their postcode cleared so they are not forced through postcode blocking. Search addresses always go through standardise_address with the user’s standardise flag. For fuzzy matching, reference addresses use the same flag; for the neural matching task the reference side skips full standardisation at this step (only the lighter preparation), because full reference standardisation was found to hurt model performance.\nCore function (standardise_address). Every row gets a string with the UK postcode removed from the free-text address (regex-based extraction), so the fuzzy comparison is not dominated by matching postcodes that are already used as a blocker. When standardise is true, the remaining text is normalised further for London-style housing addresses: common abbreviations are expanded (for example rd → road, st → street), apartment/maisonette/mais are mapped toward flat, stray apostrophes and duplicate spaces are cleaned, and commas are spaced consistently. House, court, and terrace patterns are reconciled with flat wording (including removing redundant “flat” where there is only one number, then re-inserting a consistent flat prefix where the housing list expects it). Numeric patterns such as 12/14 or 12-14 are collapsed to a single leading number, and “ground/first/… floor” style phrases are normalised before the final search_address_stand or ref_address_stand column is written.\nWhen standardise is false, the stand column is essentially the postcode-stripped string built from the wrapper’s already lowercased address text, without the abbreviation and flat-layout rewriting above.\nStructured fields. Regardless of the standardise flag, the same function pass extracts property, flat, room, block/unit, and house/court components from the stand text so the matcher can apply number and unit checks alongside fuzzy scores.\nBackend. Some of the string steps run as pandas str operations by default; with STANDARDISE_BACKEND=polars, selected extraction steps use Polars under the hood for speed while the surrounding API stays pandas-based."
   },
   {
-    "objectID": "src/user_guide.html#outputs-and-how-to-interpret-them",
-    "href": "src/user_guide.html#outputs-and-how-to-interpret-them",
+    "objectID": "src/user_guide.html#blocking-and-scoring",
+    "href": "src/user_guide.html#blocking-and-scoring",
     "title": "User guide",
-    "section": "Outputs and how to interpret them",
-    "text": "Outputs and how to interpret them\nThe function returns:\n\nfinal_summary: run summary text used in the app summary panel.\noutput_files: downloadable output paths shown in the app.\nestimate_total_processing_time: estimated runtime in seconds.\nsummary_table_md: markdown summary table rendered in the app.\n\n\nTypical output files\nDepending on your run, output files usually include:\n\nMain results on original search rows (joined search + match/reference fields).\nA match diagnostics output with match method and scoring details.\nA summary CSV with counts and percentages by inclusion/match status.\nAPI artifact output when API mode is used.\n\n\n\nKey result concepts\n\nExcluded from search: records skipped due to input quality or rule checks.\nMatched with reference address: whether a reference match was found.\nReference matched address: the selected reference address for matched rows.\nReference file: source reference file used for the match.\nReason for exclusion: why a record was not eligible for matching."
+    "section": "Blocking and scoring",
+    "text": "Blocking and scoring\n\nPostcode blocking (when enabled and both sides have usable postcodes): addresses in the same postcode (or overlapping postcode groups) are compared with fuzzy scores.\nStreet blocking: used as the primary pass when postcode blocking is off, and optionally as a second pass after postcode matching when street-based matching after postcode blocking is enabled—typically for rows that did not get a full match in the postcode pass.\n\nWithin each block, the tool uses RapidFuzz (rapidfuzz.fuzz, rapidfuzz.process). RapidFuzz exposes scorer names compatible with the older FuzzyWuzzy library. Intuition for ratio, partial_ratio, token_sort_ratio, and token_set_ratio—for example how token set compares strings with extra or reordered words—is described well in FuzzyWuzzy: Fuzzy String Matching in Python (SeatGeek).\nThe scorer used for blocked pairwise comparison is set by FUZZY_SCORER_USED (default token_set_ratio). Other allowed names include ratio, partial_ratio, token_sort_ratio, partial_token_sort_ratio, partial_token_set_ratio, QRatio, UQRatio, WRatio, and UWRatio (see comments in fuzzy_address_matcher.constants). Pairwise scores are computed with a minimum score cutoff equal to the minimum fuzzy score in the GUI or FUZZY_MATCH_LIMIT in configuration."
   },
   {
-    "objectID": "src/user_guide.html#guardrails-and-common-issues",
-    "href": "src/user_guide.html#guardrails-and-common-issues",
+    "objectID": "src/user_guide.html#diagnostics-columns",
+    "href": "src/user_guide.html#diagnostics-columns",
     "title": "User guide",
-    "section": "Guardrails and common issues",
-    "text": "Guardrails and common issues\n\nIf no search input is supplied, matching does not run.\nIf neither reference file nor API is supplied, matching does not run.\nIf reference matching is used without selecting reference address columns, matching does not run.\nIf file-based search is used without selecting search address columns, matching does not run.\nIf loaded search/reference data is empty, there is nothing to match.\n\nWhen postcode blocking is enabled but usable postcodes are unavailable, the workflow can fall back to street-only blocking."
-  },
-  {
-    "objectID": "src/user_guide.html#good-practice",
-    "href": "src/user_guide.html#good-practice",
-    "title": "User guide",
-    "section": "Good practice",
-    "text": "Good practice\n\nKeep postcode as the final selected address component where applicable.\nReview unmatched and excluded records before downstream use.\nTreat results as candidate matches requiring validation rather than final truth."
+    "section": "Diagnostics columns",
+    "text": "Diagnostics columns\nOutputs and diagnostics include fuzzy_score from the configured scorer. When resolving some duplicate candidate situations, diagnostics may add wratio_score for ordering; the implementation uses RapidFuzz’s simple ratio in that tie-break path."
   },
   {
     "objectID": "index.html",

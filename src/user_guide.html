@@ -23,6 +23,41 @@ ul.task-list li input[type="checkbox"] {
   margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
   vertical-align: middle;
 }
+/* CSS for syntax highlighting */
+html { -webkit-text-size-adjust: 100%; }
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
 </style>
 
 
@@ -116,6 +151,18 @@ ul.task-list li input[type="checkbox"] {
    
   <ul>
   <li><a href="#overview" id="toc-overview" class="nav-link active" data-scroll-target="#overview">Overview</a></li>
+  <li><a href="#installation" id="toc-installation" class="nav-link" data-scroll-target="#installation">Installation</a>
+  <ul class="collapse">
+  <li><a href="#installing-from-pypi" id="toc-installing-from-pypi" class="nav-link" data-scroll-target="#installing-from-pypi">Installing from pypi</a></li>
+  <li><a href="#use-in-a-python-script" id="toc-use-in-a-python-script" class="nav-link" data-scroll-target="#use-in-a-python-script">Use in a Python script</a>
+  <ul class="collapse">
+  <li><a href="#example-input-files" id="toc-example-input-files" class="nav-link" data-scroll-target="#example-input-files">Example input files</a></li>
+  <li><a href="#match-using-external-csv-files" id="toc-match-using-external-csv-files" class="nav-link" data-scroll-target="#match-using-external-csv-files">1) Match using external CSV files</a></li>
+  <li><a href="#match-using-dataframes-already-loaded-in-python" id="toc-match-using-dataframes-already-loaded-in-python" class="nav-link" data-scroll-target="#match-using-dataframes-already-loaded-in-python">2) Match using DataFrames already loaded in Python</a></li>
+  <li><a href="#advanced-fuzzy_address_match-parameters" id="toc-advanced-fuzzy_address_match-parameters" class="nav-link" data-scroll-target="#advanced-fuzzy_address_match-parameters">Advanced <code>fuzzy_address_match</code> parameters</a></li>
+  </ul></li>
+  <li><a href="#run-the-gui-app" id="toc-run-the-gui-app" class="nav-link" data-scroll-target="#run-the-gui-app">Run the GUI app</a></li>
+  </ul></li>
   <li><a href="#before-you-start" id="toc-before-you-start" class="nav-link" data-scroll-target="#before-you-start">Before you start</a></li>
   <li><a href="#match-workflow-in-the-app" id="toc-match-workflow-in-the-app" class="nav-link" data-scroll-target="#match-workflow-in-the-app">Match workflow in the app</a></li>
   <li><a href="#input-reference-fuzzy_address_match" id="toc-input-reference-fuzzy_address_match" class="nav-link" data-scroll-target="#input-reference-fuzzy_address_match">Input reference (<code>fuzzy_address_match</code>)</a>
@@ -123,7 +170,9 @@ ul.task-list li input[type="checkbox"] {
   <li><a href="#search-inputs" id="toc-search-inputs" class="nav-link" data-scroll-target="#search-inputs">Search inputs</a></li>
   <li><a href="#reference-inputs" id="toc-reference-inputs" class="nav-link" data-scroll-target="#reference-inputs">Reference inputs</a></li>
   <li><a href="#api-inputs" id="toc-api-inputs" class="nav-link" data-scroll-target="#api-inputs">API inputs</a></li>
-  <li><a href="#matching-behavior-inputs" id="toc-matching-behavior-inputs" class="nav-link" data-scroll-target="#matching-behavior-inputs">Matching behavior inputs</a></li>
+  <li><a href="#additional-settings-gui-and-fuzzy_address_match" id="toc-additional-settings-gui-and-fuzzy_address_match" class="nav-link" data-scroll-target="#additional-settings-gui-and-fuzzy_address_match">Additional settings (GUI and <code>fuzzy_address_match</code>)</a></li>
+  <li><a href="#output-folder-behaviour" id="toc-output-folder-behaviour" class="nav-link" data-scroll-target="#output-folder-behaviour">Output folder behaviour</a></li>
+  <li><a href="#matching-behaviour-inputs" id="toc-matching-behaviour-inputs" class="nav-link" data-scroll-target="#matching-behaviour-inputs">Matching behaviour inputs</a></li>
   </ul></li>
   <li><a href="#outputs-and-how-to-interpret-them" id="toc-outputs-and-how-to-interpret-them" class="nav-link" data-scroll-target="#outputs-and-how-to-interpret-them">Outputs and how to interpret them</a>
   <ul class="collapse">
@@ -131,6 +180,13 @@ ul.task-list li input[type="checkbox"] {
   <li><a href="#key-result-concepts" id="toc-key-result-concepts" class="nav-link" data-scroll-target="#key-result-concepts">Key result concepts</a></li>
   </ul></li>
   <li><a href="#guardrails-and-common-issues" id="toc-guardrails-and-common-issues" class="nav-link" data-scroll-target="#guardrails-and-common-issues">Guardrails and common issues</a></li>
+  <li><a href="#how-fuzzy-address-matching-works" id="toc-how-fuzzy-address-matching-works" class="nav-link" data-scroll-target="#how-fuzzy-address-matching-works">How fuzzy address matching works</a>
+  <ul class="collapse">
+  <li><a href="#address-standardisation" id="toc-address-standardisation" class="nav-link" data-scroll-target="#address-standardisation">Address standardisation</a></li>
+  <li><a href="#blocking-and-scoring" id="toc-blocking-and-scoring" class="nav-link" data-scroll-target="#blocking-and-scoring">Blocking and scoring</a></li>
+  <li><a href="#diagnostics-columns" id="toc-diagnostics-columns" class="nav-link" data-scroll-target="#diagnostics-columns">Diagnostics columns</a></li>
+  </ul></li>
+  <li><a href="#tuning-via-environment-variables" id="toc-tuning-via-environment-variables" class="nav-link" data-scroll-target="#tuning-via-environment-variables">Tuning via environment variables</a></li>
   <li><a href="#good-practice" id="toc-good-practice" class="nav-link" data-scroll-target="#good-practice">Good practice</a></li>
   </ul>
 </nav>
@@ -157,8 +213,8 @@ ul.task-list li input[type="checkbox"] {
 </header>
 
 
-<section id="overview" class="level2">
-<h2 class="anchored" data-anchor-id="overview">Overview</h2>
+<section id="overview" class="level1">
+<h1>Overview</h1>
 <p>The Fuzzy address matcher app compares your search addresses against a reference source and produces match outputs for review.</p>
 <p>You can run matching in two ways:</p>
 <ul>
@@ -167,8 +223,87 @@ ul.task-list li input[type="checkbox"] {
 </ul>
 <p>The app is intended for UK address workflows. Where postcodes are used, keep postcode as the last selected address component when possible.</p>
 </section>
-<section id="before-you-start" class="level2">
-<h2 class="anchored" data-anchor-id="before-you-start">Before you start</h2>
+<section id="installation" class="level1">
+<h1>Installation</h1>
+<p>Requires Python 3.10 or newer.</p>
+<section id="installing-from-pypi" class="level2">
+<h2 class="anchored" data-anchor-id="installing-from-pypi">Installing from pypi</h2>
+<p>Install the latest release from PyPI:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="ex">pip</span> install fuzzy_address_matcher</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>This installation supports both Python-script usage and the GUI console command.</p>
+</section>
+<section id="use-in-a-python-script" class="level2">
+<h2 class="anchored" data-anchor-id="use-in-a-python-script">Use in a Python script</h2>
+<p>Import the matcher function:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> fuzzy_address_matcher.matcher_funcs <span class="im">import</span> fuzzy_address_match</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<section id="example-input-files" class="level3">
+<h3 class="anchored" data-anchor-id="example-input-files">Example input files</h3>
+<ul>
+<li>If you cloned the repo, the example CSVs are at <code>example_data/</code>.</li>
+<li>If you installed from PyPI, the same example CSVs are bundled inside the installed package at <code>fuzzy_address_matcher/example_data/</code> (and the GUI’s <strong>Load London example</strong> button will find them automatically).</li>
+</ul>
+</section>
+<section id="match-using-external-csv-files" class="level3">
+<h3 class="anchored" data-anchor-id="match-using-external-csv-files">1) Match using external CSV files</h3>
+<p>Pass file paths for your search dataset and reference dataset.</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> fuzzy_address_matcher.matcher_funcs <span class="im">import</span> fuzzy_address_match</span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>final_summary, output_files, estimated_seconds, summary_table_md <span class="op">=</span> fuzzy_address_match(</span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>    in_file<span class="op">=</span><span class="st">"example_data/search_addresses_london.csv"</span>,</span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>    in_ref<span class="op">=</span><span class="st">"example_data/reference_addresses_london.csv"</span>,</span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>    in_colnames<span class="op">=</span>[<span class="st">"address_line_1"</span>, <span class="st">"address_line_2"</span>, <span class="st">"postcode"</span>],</span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a>    in_refcol<span class="op">=</span>[<span class="st">"addr1"</span>, <span class="st">"addr2"</span>, <span class="st">"addr3"</span>, <span class="st">"addr4"</span>, <span class="st">"postcode"</span>],</span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a>    in_joincol<span class="op">=</span><span class="va">None</span>,</span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a>    output_folder<span class="op">=</span><span class="st">"outputs"</span>,</span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(final_summary)</span>
+<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(output_files)</span>
+<span id="cb3-14"><a href="#cb3-14" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(summary_table_md)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</section>
+<section id="match-using-dataframes-already-loaded-in-python" class="level3">
+<h3 class="anchored" data-anchor-id="match-using-dataframes-already-loaded-in-python">2) Match using DataFrames already loaded in Python</h3>
+<p>If your data is already in memory, pass DataFrames directly with <code>search_df</code> and <code>ref_df</code>.</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb4"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> fuzzy_address_matcher.matcher_funcs <span class="im">import</span> fuzzy_address_match</span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a><span class="co"># Assume search_df and ref_df already exist in your Python session.</span></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>final_summary, output_files, estimated_seconds, summary_table_md <span class="op">=</span> fuzzy_address_match(</span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>    search_df<span class="op">=</span>search_df,</span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>    ref_df<span class="op">=</span>ref_df,</span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>    in_colnames<span class="op">=</span>[<span class="st">"address_line_1"</span>, <span class="st">"address_line_2"</span>, <span class="st">"postcode"</span>],</span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>    in_refcol<span class="op">=</span>[<span class="st">"addr1"</span>, <span class="st">"addr2"</span>, <span class="st">"addr3"</span>, <span class="st">"addr4"</span>, <span class="st">"postcode"</span>],</span>
+<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a>    in_joincol<span class="op">=</span><span class="va">None</span>,</span>
+<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a>    output_folder<span class="op">=</span><span class="st">"outputs"</span>,</span>
+<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-13"><a href="#cb4-13" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(final_summary)</span>
+<span id="cb4-14"><a href="#cb4-14" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(output_files)</span>
+<span id="cb4-15"><a href="#cb4-15" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(summary_table_md)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</section>
+<section id="advanced-fuzzy_address_match-parameters" class="level3">
+<h3 class="anchored" data-anchor-id="advanced-fuzzy_address_match-parameters">Advanced <code>fuzzy_address_match</code> parameters</h3>
+<p>The Gradio app only passes a subset of arguments. From Python you can also control, for example:</p>
+<ul>
+<li><code>print_match_stage_summary_to_console</code>, <code>run_batches_in_parallel</code>, <code>max_parallel_workers</code></li>
+<li><code>search_df</code>, <code>ref_df</code>, and <code>results_df</code> instead of file uploads</li>
+<li><code>InitMatch</code> and <code>progress</code> for custom matcher state or Gradio progress reporting</li>
+</ul>
+<p>See the docstring on <code>fuzzy_address_match</code> in <code>fuzzy_address_matcher/matcher_funcs.py</code> for the full signature and behaviour.</p>
+</section>
+</section>
+<section id="run-the-gui-app" class="level2">
+<h2 class="anchored" data-anchor-id="run-the-gui-app">Run the GUI app</h2>
+<p>If you installed from PyPI, you can run the GUI via the console script:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb5"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="ex">fuzzy-address-matcher</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>To run the Gradio GUI app, clone the repo and run it from the project root:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb6"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="fu">git</span> clone https://github.com/seanpedrick-case/fuzzy_address_matcher.git</span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a><span class="bu">cd</span> fuzzy_address_matcher</span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a><span class="ex">pip</span> install <span class="at">-e</span> .</span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a><span class="ex">python</span> app.py</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</section>
+</section>
+<section id="before-you-start" class="level1">
+<h1>Before you start</h1>
 <ul>
 <li>Prepare a search dataset containing the address fields you want to match.</li>
 <li>Decide whether your reference source is:
@@ -180,13 +315,14 @@ ul.task-list li input[type="checkbox"] {
 <li>If your search file already contains prior match fields, identify those columns so they can be preserved in results.</li>
 </ul>
 </section>
-<section id="match-workflow-in-the-app" class="level2">
-<h2 class="anchored" data-anchor-id="match-workflow-in-the-app">Match workflow in the app</h2>
+<section id="match-workflow-in-the-app" class="level1">
+<h1>Match workflow in the app</h1>
 <ol type="1">
 <li>Upload one or more search files in <strong>Match multiple addresses in a CSV/XLSX/Parquet file</strong>.</li>
 <li>Choose search address columns in <strong>Address columns in search data</strong>.</li>
 <li>Optionally choose <strong>Columns indicating existing address matches</strong>.</li>
-<li>Optionally enable <strong>Use postcode blocker</strong>.</li>
+<li>Optionally enable <strong>Use postcode as blocker</strong> (untick only if you do not have a postcode column; the app then uses street-only blocking).</li>
+<li>Open <strong>Additional settings</strong> (collapsed by default) if you want to change the <strong>minimum fuzzy score</strong> (0–100) or turn off <strong>street-based matching after postcode blocking</strong> for rows not fully matched in the postcode pass. Leave defaults if unsure.</li>
 <li>Optionally provide <strong>Single address input</strong> for one-off matching.</li>
 <li>Choose a reference route:
 <ul>
@@ -199,16 +335,16 @@ ul.task-list li input[type="checkbox"] {
 <li><strong>Reference join columns</strong></li>
 </ul></li>
 <li>Click <strong>Match addresses</strong>.</li>
-<li>Review:
+<li>Review:</li>
+</ol>
 <ul>
 <li>Summary text</li>
 <li>Downloadable output files</li>
 <li>Summary table markdown</li>
-</ul></li>
-</ol>
+</ul>
 </section>
-<section id="input-reference-fuzzy_address_match" class="level2">
-<h2 class="anchored" data-anchor-id="input-reference-fuzzy_address_match">Input reference (<code>fuzzy_address_match</code>)</h2>
+<section id="input-reference-fuzzy_address_match" class="level1">
+<h1>Input reference (<code>fuzzy_address_match</code>)</h1>
 <p>The app calls <code>fuzzy_address_match(...)</code> with these user-facing inputs.</p>
 <section id="search-inputs" class="level3">
 <h3 class="anchored" data-anchor-id="search-inputs">Search inputs</h3>
@@ -234,15 +370,31 @@ ul.task-list li input[type="checkbox"] {
 <li><code>in_api_key</code>: API key used for AddressBase access.</li>
 </ul>
 </section>
-<section id="matching-behavior-inputs" class="level3">
-<h3 class="anchored" data-anchor-id="matching-behavior-inputs">Matching behavior inputs</h3>
+<section id="additional-settings-gui-and-fuzzy_address_match" class="level3">
+<h3 class="anchored" data-anchor-id="additional-settings-gui-and-fuzzy_address_match">Additional settings (GUI and <code>fuzzy_address_match</code>)</h3>
+<ul>
+<li><code>fuzzy_match_limit</code>: minimum RapidFuzz score (0–100) used as <code>score_cutoff</code> during blocked comparison and for fuzzy match diagnostics; default from configuration (<code>FUZZY_MATCH_LIMIT</code>, often 85). The GUI exposes this as <strong>Minimum fuzzy score</strong>.</li>
+<li><code>run_street_matching</code>: when postcode blocking is on, also run street-blocked fuzzy matching for search rows that are not fully matched after the postcode pass. Untick to use postcode-blocked fuzzy matching only. When postcode blocking is off, street-only matching still runs as the primary pass and this option has no extra effect.</li>
+<li><code>save_output_files</code>: when true, the pipeline writes results, diagnostics, and summary CSV files and the GUI can offer them as downloads. When false, the run may finish without writing those files. Default comes from <code>SAVE_OUTPUT_FILES</code>. The stock Gradio app includes a <strong>Save output CSV files</strong> control that is usually hidden; typical users keep the default (on).</li>
+</ul>
+</section>
+<section id="output-folder-behaviour" class="level3">
+<h3 class="anchored" data-anchor-id="output-folder-behaviour">Output folder behaviour</h3>
+<ul>
+<li><code>output_folder</code>: optional subdirectory or path segment resolved under the configured base output directory (<code>GRADIO_OUTPUT_FOLDER</code> / <code>OUTPUT_FOLDER</code> in <code>fuzzy_address_matcher.config</code>). From Python, paths must stay within that base directory.</li>
+<li>When <code>SESSION_OUTPUT_FOLDER</code> is true (common on hosted deployments), the app creates a per-session or per-user subfolder under the base output folder so separate runs do not overwrite the same files.</li>
+</ul>
+</section>
+<section id="matching-behaviour-inputs" class="level3">
+<h3 class="anchored" data-anchor-id="matching-behaviour-inputs">Matching behaviour inputs</h3>
 <ul>
 <li><code>use_postcode_blocker</code>: prefer postcode-based blocking when possible.</li>
 </ul>
+<p>You must keep at least one meaningful matching path: if postcode blocking is off <strong>and</strong> street-based matching is disabled, <code>fuzzy_address_match</code> raises an error.</p>
 </section>
 </section>
-<section id="outputs-and-how-to-interpret-them" class="level2">
-<h2 class="anchored" data-anchor-id="outputs-and-how-to-interpret-them">Outputs and how to interpret them</h2>
+<section id="outputs-and-how-to-interpret-them" class="level1">
+<h1>Outputs and how to interpret them</h1>
 <p>The function returns:</p>
 <ul>
 <li><code>final_summary</code>: run summary text used in the app summary panel.</li>
@@ -271,8 +423,8 @@ ul.task-list li input[type="checkbox"] {
 </ul>
 </section>
 </section>
-<section id="guardrails-and-common-issues" class="level2">
-<h2 class="anchored" data-anchor-id="guardrails-and-common-issues">Guardrails and common issues</h2>
+<section id="guardrails-and-common-issues" class="level1">
+<h1>Guardrails and common issues</h1>
 <ul>
 <li>If no search input is supplied, matching does not run.</li>
 <li>If neither reference file nor API is supplied, matching does not run.</li>
@@ -282,8 +434,46 @@ ul.task-list li input[type="checkbox"] {
 </ul>
 <p>When postcode blocking is enabled but usable postcodes are unavailable, the workflow can fall back to street-only blocking.</p>
 </section>
-<section id="good-practice" class="level2">
-<h2 class="anchored" data-anchor-id="good-practice">Good practice</h2>
+<section id="how-fuzzy-address-matching-works" class="level1">
+<h1>How fuzzy address matching works</h1>
+<p>The matcher compares search and reference addresses <strong>after preparation in</strong> <code>fuzzy_address_matcher.standardise</code>: rows are grouped into <strong>blocks</strong> (postcode or street), and RapidFuzz scores pairs only inside each block (i.e.&nbsp;a subset of rows, not every single search row to every single reference row).</p>
+<section id="address-standardisation" class="level2">
+<h2 class="anchored" data-anchor-id="address-standardisation">Address standardisation</h2>
+<p>Standardisation is controlled by <strong><code>STANDARDISE_ADDRESS</code></strong>. The pipeline uses two layers in code: <code>standardise_wrapper_func</code> and <code>standardise_address</code>.</p>
+<p><strong>Wrapper (<code>standardise_wrapper_func</code>).</strong> Search and reference rows get working columns derived from the concatenated address and postcode: text is lowercased and trimmed, and <strong><code>postcode_search</code></strong> is normalised for blocking by removing internal whitespace so variants like <code>SW1A 1AA</code> and <code>sw1a1aa</code> align. Rows excluded as non-postal can have their postcode cleared so they are not forced through postcode blocking. Search addresses always go through <code>standardise_address</code> with the user’s <code>standardise</code> flag. For <strong>fuzzy</strong> matching, reference addresses use the same flag; for the <strong>neural</strong> matching task the reference side skips full standardisation at this step (only the lighter preparation), because full reference standardisation was found to hurt model performance.</p>
+<p><strong>Core function (<code>standardise_address</code>).</strong> Every row gets a string with the <strong>UK postcode removed</strong> from the free-text address (regex-based extraction), so the fuzzy comparison is not dominated by matching postcodes that are already used as a blocker. When <strong><code>standardise</code> is true</strong>, the remaining text is normalised further for London-style housing addresses: common abbreviations are expanded (for example <code>rd</code> → <code>road</code>, <code>st</code> → <code>street</code>), <code>apartment</code>/<code>maisonette</code>/<code>mais</code> are mapped toward <code>flat</code>, stray apostrophes and duplicate spaces are cleaned, and commas are spaced consistently. <strong>House</strong>, <strong>court</strong>, and <strong>terrace</strong> patterns are reconciled with <strong>flat</strong> wording (including removing redundant “flat” where there is only one number, then re-inserting a consistent <code>flat</code> prefix where the housing list expects it). Numeric patterns such as <code>12/14</code> or <code>12-14</code> are collapsed to a single leading number, and “ground/first/… floor” style phrases are normalised before the final <strong><code>search_address_stand</code></strong> or <strong><code>ref_address_stand</code></strong> column is written.</p>
+<p>When <strong><code>standardise</code> is false</strong>, the stand column is essentially the <strong>postcode-stripped</strong> string built from the wrapper’s already lowercased address text, without the abbreviation and flat-layout rewriting above.</p>
+<p><strong>Structured fields.</strong> Regardless of the <code>standardise</code> flag, the same function pass extracts <strong>property</strong>, <strong>flat</strong>, <strong>room</strong>, <strong>block/unit</strong>, and <strong>house/court</strong> components from the stand text so the matcher can apply number and unit checks alongside fuzzy scores.</p>
+<p><strong>Backend.</strong> Some of the string steps run as <strong>pandas</strong> <code>str</code> operations by default; with <strong><code>STANDARDISE_BACKEND=polars</code></strong>, selected extraction steps use <strong>Polars</strong> under the hood for speed while the surrounding API stays pandas-based.</p>
+</section>
+<section id="blocking-and-scoring" class="level2">
+<h2 class="anchored" data-anchor-id="blocking-and-scoring">Blocking and scoring</h2>
+<ol type="1">
+<li><strong>Postcode blocking</strong> (when enabled and both sides have usable postcodes): addresses in the same postcode (or overlapping postcode groups) are compared with fuzzy scores.</li>
+<li><strong>Street blocking</strong>: used as the primary pass when postcode blocking is off, and optionally as a <strong>second pass</strong> after postcode matching when <strong>street-based matching after postcode blocking</strong> is enabled—typically for rows that did not get a full match in the postcode pass.</li>
+</ol>
+<p>Within each block, the tool uses <a href="https://github.com/rapidfuzz/RapidFuzz">RapidFuzz</a> (<code>rapidfuzz.fuzz</code>, <code>rapidfuzz.process</code>). RapidFuzz exposes scorer names compatible with the older <strong>FuzzyWuzzy</strong> library. Intuition for <code>ratio</code>, <code>partial_ratio</code>, <code>token_sort_ratio</code>, and <code>token_set_ratio</code>—for example how token set compares strings with extra or reordered words—is described well in <a href="https://chairnerd.seatgeek.com/fuzzywuzzy-fuzzy-string-matching-in-python/">FuzzyWuzzy: Fuzzy String Matching in Python</a> (SeatGeek).</p>
+<p>The scorer used for blocked pairwise comparison is set by <strong><code>FUZZY_SCORER_USED</code></strong> (default <strong><code>token_set_ratio</code></strong>). Other allowed names include <code>ratio</code>, <code>partial_ratio</code>, <code>token_sort_ratio</code>, <code>partial_token_sort_ratio</code>, <code>partial_token_set_ratio</code>, <code>QRatio</code>, <code>UQRatio</code>, <code>WRatio</code>, and <code>UWRatio</code> (see comments in <code>fuzzy_address_matcher.constants</code>). Pairwise scores are computed with a <strong>minimum score cutoff</strong> equal to the <strong>minimum fuzzy score</strong> in the GUI or <code>FUZZY_MATCH_LIMIT</code> in configuration.</p>
+</section>
+<section id="diagnostics-columns" class="level2">
+<h2 class="anchored" data-anchor-id="diagnostics-columns">Diagnostics columns</h2>
+<p>Outputs and diagnostics include <strong><code>fuzzy_score</code></strong> from the configured scorer. When resolving some duplicate candidate situations, diagnostics may add <strong><code>wratio_score</code></strong> for ordering; the implementation uses RapidFuzz’s simple ratio in that tie-break path.</p>
+</section>
+</section>
+<section id="tuning-via-environment-variables" class="level1">
+<h1>Tuning via environment variables</h1>
+<p>Configuration is driven by <code>fuzzy_address_matcher.config</code> (often via <code>config/app_config.env</code> or the process environment). Commonly adjusted variables include:</p>
+<ul>
+<li><strong><code>FUZZY_SCORER_USED</code></strong>: RapidFuzz scorer name (default <code>token_set_ratio</code>).</li>
+<li><strong><code>FUZZY_MATCH_LIMIT</code></strong>: default minimum fuzzy score 0–100 when <code>fuzzy_match_limit</code> is not passed (often 85).</li>
+<li><strong><code>STANDARDISE_ADDRESS</code></strong> / <strong><code>STANDARDISE_BACKEND</code></strong>: whether to standardise addresses and whether the standardisation backend is <code>pandas</code> or <code>polars</code>.</li>
+<li><strong><code>RUN_BATCHES_IN_PARALLEL</code></strong> / <strong><code>MAX_PARALLEL_WORKERS</code></strong>: batch parallelism for large runs (on Windows the default is sequential batching because of process spawn constraints; other platforms default to parallel unless overridden).</li>
+<li><strong><code>MATCHER_BATCH_SIZE</code></strong> / <strong><code>MATCHER_REF_BATCH_SIZE</code></strong>: maximum rows per search and reference batch.</li>
+<li><strong><code>SAVE_OUTPUT_FILES</code></strong>, <strong><code>SESSION_OUTPUT_FOLDER</code></strong>, <strong><code>GRADIO_OUTPUT_FOLDER</code></strong>: output writing and folder layout for GUI runs.</li>
+</ul>
+</section>
+<section id="good-practice" class="level1">
+<h1>Good practice</h1>
 <ul>
 <li>Keep postcode as the final selected address component where applicable.</li>
 <li>Review unmatched and excluded records before downstream use.</li>
