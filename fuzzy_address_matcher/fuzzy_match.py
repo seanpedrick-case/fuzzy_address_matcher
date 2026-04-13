@@ -7,7 +7,12 @@ import pandas as pd
 from rapidfuzz import fuzz, process
 from tqdm import tqdm
 
-from fuzzy_address_matcher.config import fuzzy_match_limit, no_number_fuzzy_match_limit
+from fuzzy_address_matcher.config import (
+    fuzzy_match_limit as default_fuzzy_match_limit,
+)
+from fuzzy_address_matcher.config import (
+    no_number_fuzzy_match_limit,
+)
 
 PandasDataFrame = Type[pd.DataFrame]
 PandasSeries = Type[pd.Series]
@@ -16,6 +21,48 @@ array = List[str]
 
 today = datetime.now().strftime("%d%m%Y")
 today_rev = datetime.now().strftime("%Y%m%d")
+
+
+def _first_series_for_col(df: pd.DataFrame, col_name: str) -> Optional[pd.Series]:
+    """Single Series when ``col_name`` is duplicated (DataFrame) or missing."""
+    if col_name not in df.columns:
+        return None
+    col = df[col_name]
+    if isinstance(col, pd.DataFrame):
+        if col.shape[1] == 0:
+            return None
+        col = col.iloc[:, 0]
+    return col if isinstance(col, pd.Series) else None
+
+
+def add_fuzzy_block_sequence_col(df: pd.DataFrame, block_col: str) -> pd.DataFrame:
+    """
+    0..n-1 within each blocker value (postcode or street), stable on original row order.
+
+    Must match iteration order in ``string_match_by_post_code_multiple`` (sort by block
+    key, then original position) so fuzzy output rows can join back without ambiguity
+    when several records share the same standardised search address within a block.
+    """
+    if df.empty:
+        out = df.copy()
+        out["_fuzzy_block_seq"] = pd.Series(dtype="Int64")
+        return out
+    blk = _first_series_for_col(df, block_col)
+    if blk is None:
+        out = df.copy()
+        out["_fuzzy_block_seq"] = np.int64(0)
+        return out
+    tmp = df.copy()
+    tmp["__fz_orig"] = np.arange(len(tmp), dtype=np.int64)
+    tmp["__fz_block_key"] = blk
+    tmp = tmp.sort_values(["__fz_block_key", "__fz_orig"], kind="mergesort")
+    tmp["_fuzzy_block_seq"] = (
+        tmp.groupby("__fz_block_key", sort=False).cumcount().astype(np.int64)
+    )
+    out = tmp.sort_values("__fz_orig").drop(
+        columns=["__fz_orig", "__fz_block_key"], errors="ignore"
+    )
+    return out
 
 
 def _create_frame(
@@ -87,6 +134,8 @@ def string_match_by_post_code_multiple(
     reference_address_series: PandasSeries,
     search_limit=100,
     scorer_name="token_set_ratio",
+    fuzzy_match_limit: Optional[float] = None,
+    show_progress: bool = True,
     progress=gr.Progress(track_tqdm=True),
 ) -> MatchedResults:
     """
@@ -101,6 +150,11 @@ def string_match_by_post_code_multiple(
     https://stackoverflow.com/questions/31806695/when-to-use-which-fuzz-function-to-compare-2-strings
 
     """
+    _score_cutoff = (
+        default_fuzzy_match_limit
+        if fuzzy_match_limit is None
+        else float(fuzzy_match_limit)
+    )
 
     def do_one_match(
         reference_addresses: pd.Series,
@@ -122,7 +176,13 @@ def string_match_by_post_code_multiple(
                 for j, reference_address in enumerate(reference_addresses):
                     score = matched[i][j]
                     results.append(
-                        (postcode_match, search_address, reference_address, score)
+                        (
+                            postcode_match,
+                            i,
+                            search_address,
+                            reference_address,
+                            score,
+                        )
                     )
 
             # Create a dataframe from the results list
@@ -130,6 +190,7 @@ def string_match_by_post_code_multiple(
                 results,
                 columns=[
                     "postcode_search",
+                    "fuzzy_search_block_seq",
                     "fuzzy_match_search_address",
                     "fuzzy_match_reference_address",
                     "fuzzy_score",
@@ -146,7 +207,7 @@ def string_match_by_post_code_multiple(
                     search_addresses.values,
                     [reference_addresses],
                     scorer=scorer,
-                    score_cutoff=fuzzy_match_limit,
+                    score_cutoff=_score_cutoff,
                     workers=-1,
                 )
 
@@ -160,7 +221,7 @@ def string_match_by_post_code_multiple(
                     search_addresses.values,
                     reference_addresses.values,
                     scorer=scorer,
-                    score_cutoff=fuzzy_match_limit,
+                    score_cutoff=_score_cutoff,
                     workers=-1,
                 )
 
@@ -203,9 +264,6 @@ def string_match_by_post_code_multiple(
             )  # [("NA", 0)] # for _ in range(1, search_limit + 1)]
             return matched
 
-    # print("Fuzzy match column length: ", len(match_address_series))
-    # print("Fuzzy Reference column length: ", len(reference_address_series))
-
     match_address_series = match_address_series.rename_axis("postcode_search")
     match_address_df = pd.DataFrame(match_address_series.reset_index())
     match_address_df["index"] = list(range(0, len(match_address_df)))
@@ -226,7 +284,10 @@ def string_match_by_post_code_multiple(
     unique_postcodes = pd.unique(match_address_df["postcode_search"])
 
     for postcode_match in tqdm(
-        unique_postcodes, desc="Fuzzy matching", unit="blocks (postcodes or streets)"
+        unique_postcodes,
+        desc="Fuzzy matching",
+        unit="blocks (postcodes or streets)",
+        disable=not show_progress,
     ):
 
         postcode_match_list = [postcode_match]
@@ -300,11 +361,13 @@ def _create_fuzzy_match_results_output(
         ref_list_df=ref_df_after_stand,
         fuzzy_match_limit=fuzzy_match_limit,
         blocker_col=blocker_col,
+        search_df_key_field=search_df_key_field,
     )
 
     ## Fuzzy search results
     match_results_cols = [
         "search_orig_address",
+        "search_merge_full_address",
         "reference_orig_address",
         "ref_index",
         "full_match",
@@ -336,25 +399,80 @@ def _create_fuzzy_match_results_output(
         "Postcode",
     ]
 
-    # Join results data onto the original housing list to create the full output
+    # Join results data onto the original housing list to create the full output.
+    # Include the stable original-format display address when present so the
+    # exported `search_orig_address` never reflects standardised/lowercased text.
     search_df_cleaned_join_cols = [search_df_key_field, "full_address", "postcode"]
+    if "search_input_display" in search_df_cleaned.columns:
+        search_df_cleaned_join_cols.append("search_input_display")
 
-    match_results_output = search_df_cleaned[search_df_cleaned_join_cols].merge(
-        diag_best_match[match_results_cols],
-        how="left",
-        left_on="full_address",
-        right_on="search_orig_address",
-    )
+    _diag_cols = [c for c in match_results_cols if c in diag_best_match.columns]
+    if (
+        search_df_key_field
+        and search_df_key_field in diag_best_match.columns
+        and search_df_key_field not in _diag_cols
+    ):
+        _diag_cols.insert(0, search_df_key_field)
+
+    _left_out = search_df_cleaned[search_df_cleaned_join_cols].copy()
+    _diag_subset = diag_best_match[_diag_cols].copy()
+    if search_df_key_field in _diag_subset.columns:
+        _left_out[search_df_key_field] = _left_out[search_df_key_field].astype(str)
+        _diag_subset[search_df_key_field] = _diag_subset[search_df_key_field].astype(
+            str
+        )
+        match_results_output = _left_out.merge(
+            _diag_subset, how="left", on=search_df_key_field
+        )
+    else:
+        match_results_output = _left_out.merge(
+            _diag_subset,
+            how="left",
+            left_on="full_address",
+            right_on="search_merge_full_address",
+        )
 
     match_results_output = match_results_output.drop(
-        ["postcode", "search_orig_address"], axis=1
-    ).rename(columns={"full_address": "search_orig_address"})
+        ["postcode", "search_merge_full_address"], axis=1, errors="ignore"
+    )
+    # `search_orig_address` from diagnostics is already display-oriented; optionally
+    # overwrite with `search_input_display` when present. Always drop prepared
+    # `full_address` so we do not carry duplicate address columns forward.
+    if "search_input_display" in match_results_output.columns:
+        _sid = match_results_output["search_input_display"]
+        _has = (
+            _sid.notna()
+            & _sid.astype(str).str.strip().ne("")
+            & ~_sid.astype(str).str.strip().str.lower().isin(("nan", "none", "<na>"))
+        )
+        _base = (
+            match_results_output["search_orig_address"]
+            if "search_orig_address" in match_results_output.columns
+            else match_results_output["full_address"]
+        )
+        match_results_output["search_orig_address"] = _sid.where(_has, _base)
+        match_results_output = match_results_output.drop(
+            columns=["search_input_display"], errors="ignore"
+        )
+    elif "search_orig_address" not in match_results_output.columns:
+        match_results_output["search_orig_address"] = match_results_output[
+            "full_address"
+        ]
+    else:
+        _soa = match_results_output["search_orig_address"]
+        _need_fill = _soa.isna() | (_soa.astype(str).str.strip().eq(""))
+        if _need_fill.any():
+            match_results_output.loc[_need_fill, "search_orig_address"] = (
+                match_results_output.loc[_need_fill, "full_address"]
+            )
+    match_results_output = match_results_output.drop(
+        columns=["full_address"], errors="ignore"
+    )
 
     # Join UPRN back onto the data from reference data
     joined_ref_cols = ["fulladdress", "Reference file"]
     joined_ref_cols.extend(new_join_col)
 
-    # print("joined_ref_cols: ", joined_ref_cols)
     # Keep only columns that exist in reference dataset
     joined_ref_cols = [col for col in joined_ref_cols if col in ref_df_cleaned.columns]
 
@@ -608,8 +726,9 @@ def create_diagnostic_results(
     final_ref_address_col="ref_address_stand",
     orig_matched_address_col="full_address",
     orig_ref_address_col="fulladdress",
-    fuzzy_match_limit=fuzzy_match_limit,
+    fuzzy_match_limit=default_fuzzy_match_limit,
     blocker_col="Postcode",
+    search_df_key_field: Optional[str] = None,
 ) -> PandasDataFrame:
     """
     This function takes a result file from the fuzzy search, then refines the 'matched results' according
@@ -658,6 +777,26 @@ def create_diagnostic_results(
     )
 
     ### Join on relevant details from the standardised match dataframe
+    # `search_orig_address` is for human-facing output (preserve original casing/format).
+    # `search_merge_full_address` must stay aligned with `search_df_cleaned["full_address"]`
+    # so `_create_fuzzy_match_results_output` can merge match rows back without breaking
+    # when display text differs from prepared `full_address`.
+    matched_df = matched_df.copy()
+    if "full_address" in matched_df.columns:
+        matched_df["search_merge_full_address"] = matched_df["full_address"]
+    else:
+        matched_df["search_merge_full_address"] = ""
+    if orig_matched_address_col == "full_address" and (
+        "search_input_display" in matched_df.columns
+    ):
+        orig_matched_address_col = "search_input_display"
+
+    _block_join_col = "postcode_search" if blocker_col == "Postcode" else "street"
+    if _block_join_col not in matched_df.columns:
+        matched_df[_block_join_col] = ""
+    if "_fuzzy_block_seq" not in matched_df.columns:
+        matched_df["_fuzzy_block_seq"] = np.nan
+
     matched_df_cols = [
         final_matched_address_col,
         "property_number",
@@ -667,8 +806,16 @@ def create_diagnostic_results(
         "unit_number",
         "house_court_name",
         orig_matched_address_col,
+        "search_merge_full_address",
         "postcode",
     ]
+    if search_df_key_field and search_df_key_field in matched_df.columns:
+        if search_df_key_field not in matched_df_cols:
+            matched_df_cols.insert(0, search_df_key_field)
+    if _block_join_col not in matched_df_cols:
+        matched_df_cols.append(_block_join_col)
+    if "_fuzzy_block_seq" not in matched_df_cols:
+        matched_df_cols.append("_fuzzy_block_seq")
     for _c in matched_df_cols:
         if _c not in matched_df.columns:
             matched_df[_c] = ""
@@ -679,13 +826,50 @@ def create_diagnostic_results(
         }
     )
 
+    if "fuzzy_search_block_seq" not in results_df.columns:
+        results_df = results_df.copy()
+        results_df["fuzzy_search_block_seq"] = np.int64(0)
+    else:
+        results_df = results_df.copy()
+        results_df["fuzzy_search_block_seq"] = (
+            pd.to_numeric(results_df["fuzzy_search_block_seq"], errors="coerce")
+            .fillna(0)
+            .astype(np.int64)
+        )
+
+    matched_m = matched_df.copy()
+    matched_m["_fuzzy_block_seq"] = (
+        pd.to_numeric(matched_m["_fuzzy_block_seq"], errors="coerce")
+        .fillna(-1)
+        .astype(np.int64)
+    )
+    matched_m["_fuzzy_merge_block"] = matched_m[_block_join_col].map(
+        _norm_join_lookup_key
+    )
+    results_df["_fuzzy_merge_block"] = results_df["postcode_search"].map(
+        _norm_join_lookup_key
+    )
+
+    # Avoid duplicate labels with `results_df["postcode_search"]` (block key from
+    # fuzzy output). Pandas would add _reference/_search suffixes and break later
+    # postcode / component logic — especially for street blocking where results
+    # `postcode_search` holds the street token but matched rows carry real postcodes.
+    _drop_from_matched = []
+    if _block_join_col in matched_m.columns:
+        _drop_from_matched.append(_block_join_col)
+    if "postcode_search" in matched_m.columns:
+        _drop_from_matched.append("postcode_search")
+    if _drop_from_matched:
+        matched_m = matched_m.drop(columns=list(dict.fromkeys(_drop_from_matched)))
+
     results_df = results_df.merge(
-        matched_df,
+        matched_m,
         how="left",
-        left_on=matched_col,
-        right_on="search_mod_address",
+        left_on=[matched_col, "_fuzzy_merge_block", "fuzzy_search_block_seq"],
+        right_on=["search_mod_address", "_fuzzy_merge_block", "_fuzzy_block_seq"],
         suffixes=("_reference", "_search"),
     )
+    results_df = results_df.drop(columns=["_fuzzy_merge_block"], errors="ignore")
 
     # Choose your best matches from the list of options
     diag_shortlist = create_diag_shortlist(
@@ -696,6 +880,7 @@ def create_diagnostic_results(
     # Columns for the output match_results file in order
     match_results_cols = [
         "search_orig_address",
+        "search_merge_full_address",
         "reference_orig_address",
         "ref_index",
         "full_match",
@@ -728,6 +913,10 @@ def create_diagnostic_results(
         "Postcode",
     ]
 
+    if search_df_key_field and search_df_key_field in diag_shortlist.columns:
+        if search_df_key_field not in match_results_cols:
+            match_results_cols.insert(0, search_df_key_field)
+    match_results_cols = [c for c in match_results_cols if c in diag_shortlist.columns]
     diag_shortlist = diag_shortlist[match_results_cols]
 
     diag_shortlist["ref_index"] = diag_shortlist["ref_index"].astype(
@@ -738,8 +927,13 @@ def create_diagnostic_results(
     )
 
     # Choose best match from the shortlist that has been ordered according to score descending
-    diag_best_match = diag_shortlist[match_results_cols].drop_duplicates(
-        "search_mod_address"
+    _dedupe_subset = (
+        [search_df_key_field]
+        if (search_df_key_field and search_df_key_field in diag_shortlist.columns)
+        else ["search_mod_address"]
+    )
+    diag_best_match = diag_shortlist.drop_duplicates(
+        subset=_dedupe_subset, keep="first"
     )
 
     return diag_shortlist, diag_best_match
@@ -900,18 +1094,33 @@ def _overlay_pre_filter_address_for_display(
     Replace cleaned `full_address` with the raw input join (`address_cols_joined`) when available
     so 'Search data address' matches the original search file format for every row.
     """
-    if pre_filter_search_df is None or pre_filter_search_df.empty:
+    # Prefer using the pre-filter search snapshot (this preserves original case/format),
+    # but fall back to `search_df` itself if it already carries `address_cols_joined`.
+    # This avoids mixed casing in the output when some call paths don't pass
+    # `pre_filter_search_df`.
+    disp_src = None
+    if (
+        isinstance(pre_filter_search_df, pd.DataFrame)
+        and (not pre_filter_search_df.empty)
+        and ("address_cols_joined" in pre_filter_search_df.columns)
+    ):
+        disp_src = pre_filter_search_df
+    elif isinstance(search_df, pd.DataFrame) and (
+        "address_cols_joined" in search_df.columns
+    ):
+        disp_src = search_df
+
+    if disp_src is None:
         return search_df
     if (
-        "address_cols_joined" not in pre_filter_search_df.columns
-        or search_df_key_field not in pre_filter_search_df.columns
+        search_df_key_field not in disp_src.columns
         or "full_address" not in search_df.columns
     ):
         return search_df
 
-    disp = pre_filter_search_df[
-        [search_df_key_field, "address_cols_joined"]
-    ].drop_duplicates(subset=[search_df_key_field], keep="first")
+    disp = disp_src[[search_df_key_field, "address_cols_joined"]].drop_duplicates(
+        subset=[search_df_key_field], keep="first"
+    )
     k = search_df_key_field
     out = search_df.copy()
     out[k] = out[k].astype(str)
@@ -944,6 +1153,20 @@ def create_results_df(
     search_df = _overlay_pre_filter_address_for_display(
         search_df, search_df_key_field, pre_filter_search_df
     )
+
+    # If a stable original-format display address is present, prefer it for the
+    # output 'Search data address' rather than the prepared/standardised `full_address`.
+    if (
+        "search_input_display" in search_df.columns
+        and "full_address" in search_df.columns
+    ):
+        _sid = search_df["search_input_display"]
+        _has = (
+            _sid.notna()
+            & _sid.astype(str).str.strip().ne("")
+            & ~_sid.astype(str).str.strip().str.lower().isin(("nan", "none", "<na>"))
+        )
+        search_df["full_address"] = _sid.where(_has, search_df["full_address"])
 
     # Preserve the search-side "in_existing" values even when the column name collides
     # with `new_join_col` (and thus gets renamed and later dropped).
@@ -1144,7 +1367,5 @@ def create_results_df(
             )
             if _mask_nan_str.any():
                 results_for_orig_df_join.loc[_mask_nan_str, _c] = ""
-
-    # results_for_orig_df_join.to_csv("results_for_orig_df_join.csv")
 
     return results_for_orig_df_join

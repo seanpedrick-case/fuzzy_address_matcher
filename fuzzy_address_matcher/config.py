@@ -2,6 +2,7 @@ import json
 import os
 import re
 import socket
+import sys
 import urllib.parse
 from datetime import datetime
 from pathlib import Path
@@ -320,9 +321,7 @@ APP_CONFIG_PATH = get_or_create_env_var(
 
 if APP_CONFIG_PATH:
     if os.path.exists(APP_CONFIG_PATH):
-        print(
-            f"Loading app variables from fuzzy_address_matcher config file {APP_CONFIG_PATH}"
-        )
+        print("Loading app variables from fuzzy_address_matcher config file")
         load_dotenv(APP_CONFIG_PATH)
     # else:
     #    print("App config file not found at location:", APP_CONFIG_PATH)
@@ -437,8 +436,13 @@ USE_POSTCODE_BLOCKER = convert_string_to_boolean(
 )
 
 MAX_PARALLEL_WORKERS = int(get_or_create_env_var("MAX_PARALLEL_WORKERS", "4"))
+# Windows uses the "spawn" start method: process pools re-import the user's main script.
+# Naive scripts without ``if __name__ == "__main__":`` then fail during bootstrap. Default
+# to sequential batching on Windows; set RUN_BATCHES_IN_PARALLEL=True to opt in (with a
+# proper main guard). Other platforms keep parallel batching by default.
+_DEFAULT_RUN_BATCHES_IN_PARALLEL = "False" if sys.platform == "win32" else "True"
 RUN_BATCHES_IN_PARALLEL = convert_string_to_boolean(
-    get_or_create_env_var("RUN_BATCHES_IN_PARALLEL", "True")
+    get_or_create_env_var("RUN_BATCHES_IN_PARALLEL", _DEFAULT_RUN_BATCHES_IN_PARALLEL)
 )
 
 SHOW_FEEDBACK = convert_string_to_boolean(
@@ -502,7 +506,14 @@ if PREPARATION_BACKEND not in {"pandas", "polars"}:
 
 USE_EXISTING_STANDARDISED_FILES = convert_string_to_boolean(
     get_or_create_env_var("USE_EXISTING_STANDARDISED_FILES", "True")
-)  # If existing standardised files exist in the output folder, the standardisation process is skipped
+)  # If True, reuse compatible stand_*.parquet caches in the output folder. Set to False
+# (or delete those parquet files) for one run to force rebuild after matcher changes.
+# Set FUZZY_MATCH_DEBUG=1 to print postcode-blocker diagnostics (usable postcode_search
+# counts, duplicate column labels) during fuzzy matching.
+#
+# When postcode blocking is on, STREET_OVERFLOW_UNBATCHED_SEARCH=0 disables the extra
+# street-only batches for search rows that never appear in any postcode-overlap batch
+# (default: enabled when unset — improves recall; can increase runtime).
 SAVE_INTERIM_FILES = convert_string_to_boolean(
     get_or_create_env_var("SAVE_INTERIM_FILES", "False")
 )  # If True, save extra interim/checkpoint files during matching

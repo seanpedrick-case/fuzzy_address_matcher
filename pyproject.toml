@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fuzzy_address_matcher"
-version = "2.1.1"
+version = "2.2.0"
 description = "Match tabular address datasets together using address standardisation, rapidfuzz, and exact text matching via a Gradio GUI."
 readme = "README.md"
 authors = [

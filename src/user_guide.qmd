@@ -88,6 +88,16 @@ print(output_files)
 print(summary_table_md)
 ```
 
+### Advanced `fuzzy_address_match` parameters
+
+The Gradio app only passes a subset of arguments. From Python you can also control, for example:
+
+- `print_match_stage_summary_to_console`, `run_batches_in_parallel`, `max_parallel_workers`
+- `search_df`, `ref_df`, and `results_df` instead of file uploads
+- `InitMatch` and `progress` for custom matcher state or Gradio progress reporting
+
+See the docstring on `fuzzy_address_match` in `fuzzy_address_matcher/matcher_funcs.py` for the full signature and behaviour.
+
 ## Run the GUI app
 
 If you installed from PyPI, you can run the GUI via the console script:
@@ -119,21 +129,22 @@ python app.py
 1. Upload one or more search files in **Match multiple addresses in a CSV/XLSX/Parquet file**.
 2. Choose search address columns in **Address columns in search data**.
 3. Optionally choose **Columns indicating existing address matches**.
-4. Optionally enable **Use postcode blocker**.
-5. Optionally provide **Single address input** for one-off matching.
-6. Choose a reference route:
+4. Optionally enable **Use postcode as blocker** (untick only if you do not have a postcode column; the app then uses street-only blocking).
+5. Open **Additional settings** (collapsed by default) if you want to change the **minimum fuzzy score** (0–100) or turn off **street-based matching after postcode blocking** for rows not fully matched in the postcode pass. Leave defaults if unsure.
+6. Optionally provide **Single address input** for one-off matching.
+7. Choose a reference route:
    - Use **Addressbase API** and provide API mode/key, or
    - Upload a reference file.
-7. For reference-file matching, choose:
+8. For reference-file matching, choose:
    - **Reference address columns**
    - **Reference join columns**
-8. Click **Match addresses**.
-9. Review:
+9. Click **Match addresses**.
+10. Review:
    - Summary text
    - Downloadable output files
    - Summary table markdown
 
-## Input reference (`fuzzy_address_match`)
+# Input reference (`fuzzy_address_match`)
 
 The app calls `fuzzy_address_match(...)` with these user-facing inputs.
 
@@ -155,11 +166,24 @@ The app calls `fuzzy_address_match(...)` with these user-facing inputs.
 - `in_api`: API route option (for example postcode-based mode).
 - `in_api_key`: API key used for AddressBase access.
 
-### Matching behavior inputs
+### Additional settings (GUI and `fuzzy_address_match`)
+
+- `fuzzy_match_limit`: minimum RapidFuzz score (0–100) used as `score_cutoff` during blocked comparison and for fuzzy match diagnostics; default from configuration (`FUZZY_MATCH_LIMIT`, often 85). The GUI exposes this as **Minimum fuzzy score**.
+- `run_street_matching`: when postcode blocking is on, also run street-blocked fuzzy matching for search rows that are not fully matched after the postcode pass. Untick to use postcode-blocked fuzzy matching only. When postcode blocking is off, street-only matching still runs as the primary pass and this option has no extra effect.
+- `save_output_files`: when true, the pipeline writes results, diagnostics, and summary CSV files and the GUI can offer them as downloads. When false, the run may finish without writing those files. Default comes from `SAVE_OUTPUT_FILES`. The stock Gradio app includes a **Save output CSV files** control that is usually hidden; typical users keep the default (on).
+
+### Output folder behaviour
+
+- `output_folder`: optional subdirectory or path segment resolved under the configured base output directory (`GRADIO_OUTPUT_FOLDER` / `OUTPUT_FOLDER` in `fuzzy_address_matcher.config`). From Python, paths must stay within that base directory.
+- When `SESSION_OUTPUT_FOLDER` is true (common on hosted deployments), the app creates a per-session or per-user subfolder under the base output folder so separate runs do not overwrite the same files.
+
+### Matching behaviour inputs
 
 - `use_postcode_blocker`: prefer postcode-based blocking when possible.
 
-## Outputs and how to interpret them
+You must keep at least one meaningful matching path: if postcode blocking is off **and** street-based matching is disabled, `fuzzy_address_match` raises an error.
+
+# Outputs and how to interpret them
 
 The function returns:
 
@@ -185,7 +209,7 @@ Depending on your run, output files usually include:
 - **Reference file**: source reference file used for the match.
 - **Reason for exclusion**: why a record was not eligible for matching.
 
-## Guardrails and common issues
+# Guardrails and common issues
 
 - If no search input is supplied, matching does not run.
 - If neither reference file nor API is supplied, matching does not run.
@@ -195,7 +219,49 @@ Depending on your run, output files usually include:
 
 When postcode blocking is enabled but usable postcodes are unavailable, the workflow can fall back to street-only blocking.
 
-## Good practice
+# How fuzzy address matching works
+
+The matcher compares search and reference addresses **after preparation in** `fuzzy_address_matcher.standardise`: rows are grouped into **blocks** (postcode or street), and RapidFuzz scores pairs only inside each block (i.e. a subset of rows, not every single search row to every single reference row).
+
+## Address standardisation
+
+Standardisation is controlled by **`STANDARDISE_ADDRESS`**. The pipeline uses two layers in code: `standardise_wrapper_func` and `standardise_address`.
+
+**Wrapper (`standardise_wrapper_func`).** Search and reference rows get working columns derived from the concatenated address and postcode: text is lowercased and trimmed, and **`postcode_search`** is normalised for blocking by removing internal whitespace so variants like `SW1A 1AA` and `sw1a1aa` align. Rows excluded as non-postal can have their postcode cleared so they are not forced through postcode blocking. Search addresses always go through `standardise_address` with the user’s `standardise` flag. For **fuzzy** matching, reference addresses use the same flag; for the **neural** matching task the reference side skips full standardisation at this step (only the lighter preparation), because full reference standardisation was found to hurt model performance.
+
+**Core function (`standardise_address`).** Every row gets a string with the **UK postcode removed** from the free-text address (regex-based extraction), so the fuzzy comparison is not dominated by matching postcodes that are already used as a blocker. When **`standardise` is true**, the remaining text is normalised further for London-style housing addresses: common abbreviations are expanded (for example `rd` → `road`, `st` → `street`), `apartment`/`maisonette`/`mais` are mapped toward `flat`, stray apostrophes and duplicate spaces are cleaned, and commas are spaced consistently. **House**, **court**, and **terrace** patterns are reconciled with **flat** wording (including removing redundant “flat” where there is only one number, then re-inserting a consistent `flat` prefix where the housing list expects it). Numeric patterns such as `12/14` or `12-14` are collapsed to a single leading number, and “ground/first/… floor” style phrases are normalised before the final **`search_address_stand`** or **`ref_address_stand`** column is written.
+
+When **`standardise` is false**, the stand column is essentially the **postcode-stripped** string built from the wrapper’s already lowercased address text, without the abbreviation and flat-layout rewriting above.
+
+**Structured fields.** Regardless of the `standardise` flag, the same function pass extracts **property**, **flat**, **room**, **block/unit**, and **house/court** components from the stand text so the matcher can apply number and unit checks alongside fuzzy scores.
+
+**Backend.** Some of the string steps run as **pandas** `str` operations by default; with **`STANDARDISE_BACKEND=polars`**, selected extraction steps use **Polars** under the hood for speed while the surrounding API stays pandas-based.
+
+## Blocking and scoring
+
+1. **Postcode blocking** (when enabled and both sides have usable postcodes): addresses in the same postcode (or overlapping postcode groups) are compared with fuzzy scores.
+2. **Street blocking**: used as the primary pass when postcode blocking is off, and optionally as a **second pass** after postcode matching when **street-based matching after postcode blocking** is enabled—typically for rows that did not get a full match in the postcode pass.
+
+Within each block, the tool uses [RapidFuzz](https://github.com/rapidfuzz/RapidFuzz) (`rapidfuzz.fuzz`, `rapidfuzz.process`). RapidFuzz exposes scorer names compatible with the older **FuzzyWuzzy** library. Intuition for `ratio`, `partial_ratio`, `token_sort_ratio`, and `token_set_ratio`—for example how token set compares strings with extra or reordered words—is described well in [FuzzyWuzzy: Fuzzy String Matching in Python](https://chairnerd.seatgeek.com/fuzzywuzzy-fuzzy-string-matching-in-python/) (SeatGeek).
+
+The scorer used for blocked pairwise comparison is set by **`FUZZY_SCORER_USED`** (default **`token_set_ratio`**). Other allowed names include `ratio`, `partial_ratio`, `token_sort_ratio`, `partial_token_sort_ratio`, `partial_token_set_ratio`, `QRatio`, `UQRatio`, `WRatio`, and `UWRatio` (see comments in `fuzzy_address_matcher.constants`). Pairwise scores are computed with a **minimum score cutoff** equal to the **minimum fuzzy score** in the GUI or `FUZZY_MATCH_LIMIT` in configuration.
+
+## Diagnostics columns
+
+Outputs and diagnostics include **`fuzzy_score`** from the configured scorer. When resolving some duplicate candidate situations, diagnostics may add **`wratio_score`** for ordering; the implementation uses RapidFuzz’s simple ratio in that tie-break path.
+
+# Tuning via environment variables
+
+Configuration is driven by `fuzzy_address_matcher.config` (often via `config/app_config.env` or the process environment). Commonly adjusted variables include:
+
+- **`FUZZY_SCORER_USED`**: RapidFuzz scorer name (default `token_set_ratio`).
+- **`FUZZY_MATCH_LIMIT`**: default minimum fuzzy score 0–100 when `fuzzy_match_limit` is not passed (often 85).
+- **`STANDARDISE_ADDRESS`** / **`STANDARDISE_BACKEND`**: whether to standardise addresses and whether the standardisation backend is `pandas` or `polars`.
+- **`RUN_BATCHES_IN_PARALLEL`** / **`MAX_PARALLEL_WORKERS`**: batch parallelism for large runs (on Windows the default is sequential batching because of process spawn constraints; other platforms default to parallel unless overridden).
+- **`MATCHER_BATCH_SIZE`** / **`MATCHER_REF_BATCH_SIZE`**: maximum rows per search and reference batch.
+- **`SAVE_OUTPUT_FILES`**, **`SESSION_OUTPUT_FOLDER`**, **`GRADIO_OUTPUT_FOLDER`**: output writing and folder layout for GUI runs.
+
+# Good practice
 
 - Keep postcode as the final selected address component where applicable.
 - Review unmatched and excluded records before downstream use.

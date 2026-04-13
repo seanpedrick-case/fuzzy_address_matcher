@@ -40,6 +40,7 @@ from fuzzy_address_matcher.config import (
     USAGE_LOG_DYNAMODB_TABLE_NAME,
     USAGE_LOG_FILE_NAME,
     USAGE_LOGS_FOLDER,
+    fuzzy_match_limit,
     output_folder,
 )
 from fuzzy_address_matcher.custom_csvlogger import CSVLogger_custom
@@ -84,6 +85,20 @@ EXAMPLE_SEARCH_COLS = ["address_line_1", "address_line_2", "postcode"]
 EXAMPLE_REF_COLS = ["addr1", "addr2", "addr3", "addr4", "postcode"]
 
 
+def _ref_data_has_saotext(df: pd.DataFrame) -> bool:
+    """True when reference columns include Addressbase-style ``SaoText`` (case-insensitive)."""
+    if df is None or getattr(df, "empty", True):
+        return False
+    return any(str(c).lower() == "saotext" for c in df.columns)
+
+
+def _initial_ref_data_load_for_ui(in_ref):
+    """Like ``initial_data_load`` for reference uploads, plus accordion open/close for LLPG columns."""
+    msg, r_up, j_up, df, res_df, names = initial_data_load(in_ref)
+    acc_update = gr.update(open=not _ref_data_has_saotext(df))
+    return msg, r_up, j_up, df, res_df, names, acc_update
+
+
 class _ExampleFile:
     """Minimal file-like wrapper for helper_functions.initial_data_load."""
 
@@ -115,6 +130,7 @@ def load_address_example(_example_key: str):
             pd.DataFrame(),
             pd.DataFrame(),
             "",
+            gr.update(open=True),
         )
 
     search_files = [_ExampleFile(str(EXAMPLE_SEARCH_FILE))]
@@ -162,6 +178,7 @@ def load_address_example(_example_key: str):
         ref_df,
         ref_results_df,
         ref_file_names_end,
+        gr.update(open=not _ref_data_has_saotext(ref_df)),
     )
 
 
@@ -211,21 +228,39 @@ def build_app() -> gr.Blocks:
             label="Input addresses from file", file_count="multiple", render=False
         )
         in_colnames = gr.Dropdown(
-            value=[],
-            choices=[],
+            value=None,
+            choices=None,
             multiselect=True,
             label="Select columns that make up the address. If you provide a postcode column, place this at the end of the list of address columns.",
             render=False,
         )
         in_existing = gr.Dropdown(
-            value=[],
-            choices=[],
+            value=None,
+            choices=None,
             multiselect=False,
             label="Select columns that indicate existing matches.",
             render=False,
         )
+
         use_postcode_blocker = gr.Checkbox(
             label="Use postcode as blocker (untick to use street-only blocking). Advised to untick only if you don't have a postcode column.",
+            value=True,
+            render=False,
+        )
+        fuzzy_match_limit_input = gr.Number(
+            label="Minimum fuzzy score (0–100) for candidate pairs during blocking",
+            value=float(fuzzy_match_limit),
+            minimum=0,
+            maximum=100,
+            step=1,
+            precision=0,
+            render=False,
+        )
+        run_street_matching_input = gr.Checkbox(
+            label=(
+                "Run street-based matching after postcode blocking (for rows not fully matched). "
+                "Untick to use postcode-blocked fuzzy matching only."
+            ),
             value=True,
             render=False,
         )
@@ -255,17 +290,22 @@ def build_app() -> gr.Blocks:
             render=False,
         )
         in_refcol = gr.Dropdown(
-            value=[],
-            choices=[],
+            value=None,
+            choices=None,
             multiselect=True,
             label="Select columns that make up the reference address. Make sure postcode is at the end",
             render=False,
         )
         in_joincol = gr.Dropdown(
-            value=[],
-            choices=[],
+            value=None,
+            choices=None,
             multiselect=True,
             label="Select columns you want to join on to the search dataset",
+            render=False,
+        )
+        ref_address_cols_accordion = gr.Accordion(
+            "Reference address columns and join columns (place postcode at the end if available). If you have addresses in the Addressbase API format with columns SaoText, SaoStartNumber etc., they will be automatically detected, you can click directly on Match addresses below.",
+            open=True,
             render=False,
         )
         output_summary = gr.Markdown(
@@ -310,6 +350,7 @@ Note that this app is based on UK address data. Matching is unlikely to be 100% 
                         ref_data_state,
                         ref_results_data_state,
                         ref_data_file_names_end,
+                        ref_address_cols_accordion,
                     ],
                     example_labels=["Load London example search/reference CSVs"],
                     fn=load_address_example,
@@ -328,8 +369,15 @@ Note that this app is based on UK address data. Matching is unlikely to be 100% 
                 in_file.render()
                 in_colnames.render()
                 in_existing.render()
-                use_postcode_blocker.render()
-                save_output_files.render()
+
+                with gr.Accordion("Additional settings", open=False):
+                    with gr.Row(equal_height=True):
+                        with gr.Column(scale=1):
+                            use_postcode_blocker.render()
+                            run_street_matching_input.render()
+                        with gr.Column(scale=1):
+                            fuzzy_match_limit_input.render()
+                    save_output_files.render()
 
             with gr.Accordion("Single address input", open=False):
                 in_text.render()
@@ -339,24 +387,24 @@ Note that this app is based on UK address data. Matching is unlikely to be 100% 
 Upload a reference file to match against, or alternatively call the Addressbase API (requires API key). Fuzzy matching will work on any address format, but the neural network will only work with the LLPG LPI format, e.g. with columns SaoText, SaoStartNumber etc.. This joins on the UPRN column. If any of these are different for you, open 'Custom reference file format or join columns' below.
 """)
 
-            with gr.Accordion(
-                "Use Addressbase API (instead of reference file)", open=False
-            ):
-                in_api.render()
-                in_api_key.render()
+            with gr.Accordion("Reference data settings", open=True):
 
-            with gr.Accordion(
-                "Match against reference list of addresses in a CSV/XLSX/Parquet file",
-                open=True,
-            ):
-                in_ref.render()
+                with gr.Accordion(
+                    "Use Addressbase API (instead of reference file)", open=False
+                ):
+                    in_api.render()
+                    in_api_key.render()
 
-            with gr.Accordion(
-                "Reference address columns and join columns (place postcode at the end if available). If you have addresses in the Addressbase API format with columns SaoText, SaoStartNumber etc., they will be automatically detected, you can click directly on Match addresses below.",
-                open=True,
-            ):
-                in_refcol.render()
-                in_joincol.render()
+                with gr.Accordion(
+                    "Match against reference list of addresses in a CSV/XLSX/Parquet file",
+                    open=True,
+                ):
+                    in_ref.render()
+
+                ref_address_cols_accordion.render()
+                with ref_address_cols_accordion:
+                    in_refcol.render()
+                    in_joincol.render()
 
             match_btn = gr.Button("Match addresses", variant="primary")
 
@@ -399,7 +447,7 @@ Upload a reference file to match against, or alternatively call the Addressbase 
             ],
         )
         in_ref.change(
-            fn=initial_data_load,
+            fn=_initial_ref_data_load_for_ui,
             inputs=[in_ref],
             outputs=[
                 output_summary,
@@ -408,6 +456,7 @@ Upload a reference file to match against, or alternatively call the Addressbase 
                 ref_data_state,
                 ref_results_data_state,
                 ref_data_file_names_end,
+                ref_address_cols_accordion,
             ],
         )
 
@@ -427,6 +476,8 @@ Upload a reference file to match against, or alternatively call the Addressbase 
                 in_api,
                 in_api_key,
                 use_postcode_blocker,
+                fuzzy_match_limit_input,
+                run_street_matching_input,
                 session_output_folder_state,
                 save_output_files,
             ],
