@@ -385,11 +385,13 @@ def prepare_ref_address(
         hasattr(ref_df_cleaned.columns, "duplicated")
         and ref_df_cleaned.columns.duplicated().any()
     ):
-        dup_names = ref_df_cleaned.columns[ref_df_cleaned.columns.duplicated()].tolist()
-        if "Postcode" in dup_names:
-            ref_df_cleaned = ref_df_cleaned.loc[
-                :, ~ref_df_cleaned.columns.duplicated()
-            ].copy()
+        # Any duplicated column labels can cause `df[cols] = df[cols]...` assignments
+        # to fail with "Columns must be same length as key" because selection with a
+        # list containing duplicates produces ambiguous shapes. Keep the first
+        # occurrence of each name.
+        ref_df_cleaned = ref_df_cleaned.loc[
+            :, ~ref_df_cleaned.columns.duplicated()
+        ].copy()
 
     # In on-prem LPI db street has been excluded, so put this back in
     if ("Street" not in ref_df_cleaned.columns) & (
@@ -410,6 +412,15 @@ def prepare_ref_address(
     ref_address_cols_uprn_w_ref_present = [
         col for col in ref_address_cols_uprn_w_ref if col in ref_df_cleaned.columns
     ]
+    # If callers pass the same column in both `ref_address_cols` and `new_join_col`
+    # (common for IDs embedded in address strings), the list above can contain duplicates.
+    # Selecting a dataframe with a duplicated column list creates duplicated column labels,
+    # which can later break assignments like `df[all_columns] = ...` with
+    # "Columns must be same length as key".
+    # De-duplicate while preserving order.
+    ref_address_cols_uprn_w_ref_present = list(
+        dict.fromkeys(ref_address_cols_uprn_w_ref_present)
+    )
     ref_df_cleaned = ref_df_cleaned[ref_address_cols_uprn_w_ref_present]
 
     ref_df_cleaned = ref_df_cleaned.fillna("").infer_objects(copy=False)

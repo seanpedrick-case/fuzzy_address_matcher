@@ -502,7 +502,14 @@ if PREPARATION_BACKEND not in {"pandas", "polars"}:
 
 USE_EXISTING_STANDARDISED_FILES = convert_string_to_boolean(
     get_or_create_env_var("USE_EXISTING_STANDARDISED_FILES", "True")
-)  # If existing standardised files exist in the output folder, the standardisation process is skipped
+)  # If True, reuse compatible stand_*.parquet caches in the output folder. Set to False
+# (or delete those parquet files) for one run to force rebuild after matcher changes.
+# Set FUZZY_MATCH_DEBUG=1 to print postcode-blocker diagnostics (usable postcode_search
+# counts, duplicate column labels) during fuzzy matching.
+#
+# When postcode blocking is on, STREET_OVERFLOW_UNBATCHED_SEARCH=0 disables the extra
+# street-only batches for search rows that never appear in any postcode-overlap batch
+# (default: enabled when unset — improves recall; can increase runtime).
 SAVE_INTERIM_FILES = convert_string_to_boolean(
     get_or_create_env_var("SAVE_INTERIM_FILES", "False")
 )  # If True, save extra interim/checkpoint files during matching

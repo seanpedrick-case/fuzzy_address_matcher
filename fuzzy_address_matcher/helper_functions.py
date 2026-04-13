@@ -121,8 +121,6 @@ def ensure_output_folder_exists(output_folder):
         # Create the folder if it doesn't exist
         os.makedirs(folder_name)
         print("Created the output folder:", folder_name)
-    else:
-        print("The output folder already exists:", folder_name)
 
 
 def dummy_function(in_colnames):

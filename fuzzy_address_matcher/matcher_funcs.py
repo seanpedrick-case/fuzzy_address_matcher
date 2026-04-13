@@ -116,6 +116,7 @@ from fuzzy_address_matcher.constants import (
 )
 from fuzzy_address_matcher.fuzzy_match import (
     _create_fuzzy_match_results_output,
+    add_fuzzy_block_sequence_col,
     create_results_df,
     string_match_by_post_code_multiple,
 )
@@ -313,8 +314,10 @@ def filter_not_matched(
     if not isinstance(key_col, str):
         raise TypeError("key_col must be a string")
 
-    if key_col not in matched_results.columns:
-        raise ValueError(f"{key_col} not a column in matched_results")
+    # Empty batches or aborted stages can leave diagnostics without a key column.
+    # Treat as "no successful matches recorded" and return the full search frame.
+    if matched_results.empty or key_col not in matched_results.columns:
+        return search_df.copy() if search_df is not None else search_df
 
     if "full_match" not in matched_results.columns:
         raise ValueError("full_match not a column in matched_results")
@@ -432,7 +435,10 @@ def copy_existing_match_col_to_join_cols(
 
 
 def _rename_search_side_join_columns_overlap(
-    df: pd.DataFrame, new_join_col: List[str]
+    df: pd.DataFrame,
+    new_join_col: List[str],
+    *,
+    key_col: Optional[str] = None,
 ) -> pd.DataFrame:
     """
     If search data contains columns with the same names as `new_join_col`, rename them so
@@ -440,23 +446,213 @@ def _rename_search_side_join_columns_overlap(
     """
     if df is None or df.empty or not new_join_col:
         return df
-    rename_map = {c: f"__search_side_{c}" for c in new_join_col if c in df.columns}
+    # Never rename the key column used to merge back for display/results.
+    rename_map = {
+        c: f"__search_side_{c}"
+        for c in new_join_col
+        if (c in df.columns) and (c != key_col)
+    }
     if rename_map:
         return df.rename(columns=rename_map)
     return df
 
 
+def _normalize_join_key_strings(series: pd.Series) -> pd.Series:
+    """
+    Stable string labels for join keys so values like 6199, 6199.0, Int64(6199),
+    and the string '6199.0' compare equal after standardisation / parquet round-trips.
+    """
+    if series is None or len(series) == 0:
+        return pd.Series(dtype=object)
+    n = pd.to_numeric(series, errors="coerce")
+    whole = n.notna() & (n == n.round())
+    out = series.astype(str).copy()
+    out.loc[whole] = n.loc[whole].round().astype("Int64").astype(str)
+    non_num = n.isna()
+    out.loc[non_num] = series.loc[non_num].astype(str)
+    return out
+
+
+def _resolve_column_series(df: pd.DataFrame, col_name: str) -> Optional[pd.Series]:
+    """
+    Return a single Series for ``col_name``, even when duplicate labels make
+    ``df[col_name]`` a DataFrame (take the first occurrence).
+    """
+    if df is None or (not isinstance(df, pd.DataFrame)) or (col_name not in df.columns):
+        return None
+    col = df[col_name]
+    if isinstance(col, pd.DataFrame):
+        if col.shape[1] == 0:
+            return None
+        col = col.iloc[:, 0]
+    return col if isinstance(col, pd.Series) else None
+
+
+def _slice_frame_by_normalized_keys(
+    df: pd.DataFrame,
+    key_field: Optional[str],
+    key_values: list,
+) -> pd.DataFrame:
+    """
+    Subset ``df`` to rows whose join key appears in ``key_values``.
+
+    Cached standardisation parquets are written with ``index=False``, so frames
+    reload with a positional RangeIndex while ``create_batch_ranges`` builds
+    ``search_range`` / ``ref_range`` from the **original** index labels. Slicing
+    with ``df.index.isin(search_range)`` then drops every row when labels do not
+    match positions; matching on ``key_field`` (e.g. ``index`` / ``ref_index``)
+    avoids that.
+    """
+    if df is None or (not isinstance(df, pd.DataFrame)) or df.empty:
+        return df
+    keys_norm = set(
+        _normalize_join_key_strings(pd.Series(list(key_values), dtype=object)).tolist()
+    )
+    if key_field and key_field in df.columns:
+        col = _resolve_column_series(df, key_field)
+        if col is not None:
+            mask = _normalize_join_key_strings(col).isin(keys_norm)
+            return df.loc[mask].reset_index(drop=True)
+    return df.loc[df.index.isin(key_values)].reset_index(drop=True)
+
+
+def _fuzzy_match_debug_enabled() -> bool:
+    return os.environ.get("FUZZY_MATCH_DEBUG", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "y",
+    )
+
+
+def _log_postcode_blocker_debug(
+    *,
+    standardise: bool,
+    use_postcode_blocker: bool,
+    search_df_after_stand: pd.DataFrame,
+    ref_df_after_stand: pd.DataFrame,
+    can_run_postcode_blocker: bool,
+) -> None:
+    if not _fuzzy_match_debug_enabled():
+        return
+
+    def _dup_count(d: pd.DataFrame, c: str) -> int:
+        if c not in d.columns:
+            return 0
+        return int(d.columns.tolist().count(c))
+
+    def _nonempty_series(s: Optional[pd.Series]) -> int:
+        if s is None:
+            return 0
+        return int(s.fillna("").astype(str).str.strip().ne("").sum())
+
+    s_ser = _resolve_column_series(search_df_after_stand, "postcode_search")
+    r_ser = _resolve_column_series(ref_df_after_stand, "postcode_search")
+    s_ok = _column_has_usable_values(search_df_after_stand, "postcode_search")
+    r_ok = _column_has_usable_values(ref_df_after_stand, "postcode_search")
+    print(
+        "[FUZZY_MATCH_DEBUG] postcode blocker: "
+        f"standardise={standardise} use_postcode_blocker={use_postcode_blocker} "
+        f"can_run={can_run_postcode_blocker}"
+    )
+    print(
+        f"  search: rows={len(search_df_after_stand)} "
+        f"nonempty_postcode_search={_nonempty_series(s_ser)} "
+        f"usable_col={s_ok} dup_postcode_search_labels={_dup_count(search_df_after_stand, 'postcode_search')}"
+    )
+    print(
+        f"  ref: rows={len(ref_df_after_stand)} "
+        f"nonempty_postcode_search={_nonempty_series(r_ser)} "
+        f"usable_col={r_ok} dup_postcode_search_labels={_dup_count(ref_df_after_stand, 'postcode_search')}"
+    )
+    if not can_run_postcode_blocker:
+        reasons = []
+        if not use_postcode_blocker:
+            reasons.append("use_postcode_blocker=False")
+        if not s_ok:
+            reasons.append("search postcode_search not usable")
+        if not r_ok:
+            reasons.append("ref postcode_search not usable")
+        print(f"  reasons: {', '.join(reasons)}")
+
+
+def _street_overflow_unbatched_search_enabled() -> bool:
+    """
+    When postcode batching is on, also run street-only batches for search rows that
+    never appear in any postcode-overlap batch. Default: enabled. Set
+    STREET_OVERFLOW_UNBATCHED_SEARCH=0 to disable (faster, fewer comparisons).
+    """
+    raw = os.environ.get("STREET_OVERFLOW_UNBATCHED_SEARCH")
+    if raw is None or not str(raw).strip():
+        return True
+    return str(raw).strip().lower() not in ("0", "false", "no", "n", "off")
+
+
+def _postcode_batch_covered_search_keys_normalized(range_df: pd.DataFrame) -> set[str]:
+    """Normalized join-key strings appearing in any postcode batch ``search_range``."""
+    covered: set[str] = set()
+    if range_df is None or range_df.empty or "search_range" not in range_df.columns:
+        return covered
+    for _, r in range_df.iterrows():
+        sr = r.get("search_range")
+        if not sr:
+            continue
+        for v in list(sr):
+            covered.update(
+                _normalize_join_key_strings(pd.Series([v], dtype=object)).tolist()
+            )
+    return covered
+
+
+def _uncovered_search_key_values_for_street_overflow(
+    matcher: MatcherClass,
+    covered_norm: set[str],
+) -> List:
+    """Raw key values for search rows whose normalized key is not in ``covered_norm``."""
+    k = matcher.search_df_key_field or "index"
+    ser = _resolve_column_series(matcher.search_df_cleaned, k)
+    if ser is None:
+        ser = pd.Series(
+            matcher.search_df_cleaned.index, index=matcher.search_df_cleaned.index
+        )
+    norm = _normalize_join_key_strings(ser)
+    return ser.loc[~norm.isin(covered_norm)].tolist()
+
+
+def _matcher_search_side_sliced_to_keys(
+    matcher: MatcherClass,
+    key_values: list,
+) -> MatcherClass:
+    """Shallow copy of ``matcher`` with search-side frames filtered to ``key_values``."""
+    out = copy.copy(matcher)
+    _k = out.search_df_key_field or "index"
+    keys = list(key_values)
+    out.search_df = _slice_frame_by_normalized_keys(out.search_df, _k, keys)
+    out.search_df_not_matched = out.search_df.copy()
+    out.search_df_cleaned = _slice_frame_by_normalized_keys(
+        out.search_df_cleaned, _k, keys
+    )
+    out.search_df_after_stand = _slice_frame_by_normalized_keys(
+        out.search_df_after_stand, _k, keys
+    )
+    out.search_df_after_full_stand = _slice_frame_by_normalized_keys(
+        out.search_df_after_full_stand, _k, keys
+    )
+    return out
+
+
 def _column_has_usable_values(df: pd.DataFrame, col_name: str) -> bool:
     """Return True when the column exists and has at least one non-empty value."""
-    if (
-        (df is None)
-        or (not isinstance(df, pd.DataFrame))
-        or (col_name not in df.columns)
-    ):
+    col = _resolve_column_series(df, col_name)
+    if col is None:
         return False
+    cleaned_series = col.fillna("").astype(str).str.strip()
+    return bool(cleaned_series.ne("").any())
 
-    cleaned_series = df[col_name].fillna("").astype(str).str.strip()
-    return cleaned_series.ne("").any()
+
+def _strip_runtime_fuzzy_cols_from_stand_cache(df: pd.DataFrame) -> pd.DataFrame:
+    """Drop per-run columns that must not be reused from parquet standardisation caches."""
+    return df.drop(columns=["_fuzzy_block_seq"], errors="ignore")
 
 
 def _resolve_parallel_worker_count(
@@ -1488,10 +1684,14 @@ def load_match_data_and_filter(
         Matcher.search_df["full_address_postcode"] = search_df_cleaned["full_address"]
 
     Matcher.pre_filter_search_df = _rename_search_side_join_columns_overlap(
-        Matcher.pre_filter_search_df, Matcher.new_join_col or []
+        Matcher.pre_filter_search_df,
+        Matcher.new_join_col or [],
+        key_col=Matcher.search_df_key_field,
     )
     Matcher.excluded_df = _rename_search_side_join_columns_overlap(
-        Matcher.excluded_df, Matcher.new_join_col or []
+        Matcher.excluded_df,
+        Matcher.new_join_col or [],
+        key_col=Matcher.search_df_key_field,
     )
 
     return Matcher
@@ -1940,6 +2140,46 @@ def fuzzy_address_match(
         InitMatch.search_df_cleaned, "full_address"
     )
 
+    # Preserve a stable, original-format search address for display in outputs.
+    # Prefer the raw joined input from the pre-filter search snapshot when available.
+    _pfs = getattr(InitMatch, "pre_filter_search_df", None)
+    if (
+        isinstance(_pfs, pd.DataFrame)
+        and (not _pfs.empty)
+        and (InitMatch.search_df_key_field in _pfs.columns)
+        and ("address_cols_joined" in _pfs.columns)
+        and (InitMatch.search_df_key_field in InitMatch.search_df_cleaned.columns)
+    ):
+        _disp = (
+            _pfs[[InitMatch.search_df_key_field, "address_cols_joined"]]
+            .copy()
+            .drop_duplicates(subset=[InitMatch.search_df_key_field], keep="first")
+        )
+        _k = InitMatch.search_df_key_field
+        _disp[_k] = _disp[_k].astype(str)
+        InitMatch.search_df_cleaned[_k] = InitMatch.search_df_cleaned[_k].astype(str)
+        InitMatch.search_df_cleaned = InitMatch.search_df_cleaned.merge(
+            _disp, on=_k, how="left"
+        )
+        _orig = InitMatch.search_df_cleaned["address_cols_joined"]
+        _has_orig = (
+            _orig.notna()
+            & _orig.astype(str).str.strip().ne("")
+            & ~_orig.astype(str).str.strip().str.lower().isin(("nan", "none", "<na>"))
+        )
+        InitMatch.search_df_cleaned["search_input_display"] = _orig.where(
+            _has_orig, InitMatch.search_df_cleaned["full_address"]
+        )
+        InitMatch.search_df_cleaned = InitMatch.search_df_cleaned.drop(
+            columns=["address_cols_joined"], errors="ignore"
+        )
+    else:
+        # Fall back to the prepared address when we cannot access the pre-filter join.
+        if "search_input_display" not in InitMatch.search_df_cleaned.columns:
+            InitMatch.search_df_cleaned["search_input_display"] = (
+                InitMatch.search_df_cleaned["full_address"]
+            )
+
     # Initial preparation of reference addresses
     InitMatch.ref_df_cleaned = prepare_ref_address(
         InitMatch.ref_df, InitMatch.ref_address_cols, InitMatch.new_join_col
@@ -2049,9 +2289,13 @@ def fuzzy_address_match(
             required_col="search_address_stand",
             compare_cols=["full_address", "postcode"],
         ):
-            InitMatch.search_df_after_stand = cached
+            InitMatch.search_df_after_stand = (
+                _strip_runtime_fuzzy_cols_from_stand_cache(cached)
+            )
             _loaded_min_s = True
-            print(f"Loaded minimal search standardisation from cache:\n  {_path_min_s}")
+            print(
+                f"Loaded minimal search standardisation from cache:\n  {os.path.basename(_path_min_s)}"
+            )
         else:
             print(
                 "Cached minimal search standardisation is missing expected columns or "
@@ -2079,10 +2323,12 @@ def fuzzy_address_match(
             required_col="ref_address_stand",
             compare_cols=["fulladdress", "Postcode"],
         ):
-            InitMatch.ref_df_after_stand = cached
+            InitMatch.ref_df_after_stand = _strip_runtime_fuzzy_cols_from_stand_cache(
+                cached
+            )
             _loaded_min_r = True
             print(
-                f"Loaded minimal reference standardisation from cache:\n  {_path_min_r}"
+                f"Loaded minimal reference standardisation from cache:\n  {os.path.basename(_path_min_r)}"
             )
         else:
             print(
@@ -2130,9 +2376,13 @@ def fuzzy_address_match(
             required_col="search_address_stand",
             compare_cols=["full_address", "postcode"],
         ):
-            InitMatch.search_df_after_full_stand = cached
+            InitMatch.search_df_after_full_stand = (
+                _strip_runtime_fuzzy_cols_from_stand_cache(cached)
+            )
             _loaded_full_s = True
-            print(f"Loaded full search standardisation from cache:\n  {_path_full_s}")
+            print(
+                f"Loaded full search standardisation from cache:\n  {os.path.basename(_path_full_s)}"
+            )
         else:
             print(
                 "Cached full search standardisation is missing expected columns or "
@@ -2160,10 +2410,12 @@ def fuzzy_address_match(
             required_col="ref_address_stand",
             compare_cols=["fulladdress", "Postcode"],
         ):
-            InitMatch.ref_df_after_full_stand = cached
+            InitMatch.ref_df_after_full_stand = (
+                _strip_runtime_fuzzy_cols_from_stand_cache(cached)
+            )
             _loaded_full_r = True
             print(
-                f"Loaded full reference standardisation from cache:\n  {_path_full_r}"
+                f"Loaded full reference standardisation from cache:\n  {os.path.basename(_path_full_r)}"
             )
         else:
             print(
@@ -2209,6 +2461,8 @@ def fuzzy_address_match(
             ref_batch_size,
             "postcode",
             "Postcode",
+            search_df_key_field=InitMatch.search_df_key_field or "index",
+            ref_key_field="ref_index",
         )
     else:
         range_df = create_street_batch_ranges(
@@ -2217,69 +2471,159 @@ def fuzzy_address_match(
             batch_size,
         )
 
-    try:
-        range_df_print = range_df.copy()
-        range_df_print["search_range_summary"] = range_df_print["search_range"].apply(
-            _summarise_index_list
-        )
-        range_df_print["ref_range_summary"] = range_df_print["ref_range"].apply(
-            _summarise_index_list
-        )
-        cols = [
-            c
-            for c in [
-                "search_range_summary",
-                "batch_length",
-                "ref_range_summary",
-                "ref_length",
-            ]
-            if c in range_df_print.columns
-        ]
-        print("Batches to run in this session:")
-        print(range_df_print[cols].to_string(index=True))
-    except Exception:
-        # Fallback: preserve prior behaviour if anything unexpected happens
-        print("Batches to run in this session: ", range_df)
-
     OutputMatch = copy.copy(InitMatch)
 
-    number_of_batches = range_df.shape[0]
-    batch_inputs = []
-    for row in range(0, number_of_batches):
+    batch_inputs: List[Tuple[int, MatcherClass, bool]] = []
+    for row in range(0, range_df.shape[0]):
         search_range = range_df.iloc[row]["search_range"]
         ref_range = range_df.iloc[row]["ref_range"]
 
         BatchMatch = copy.copy(InitMatch)
-        BatchMatch.search_df = BatchMatch.search_df[
-            BatchMatch.search_df.index.isin(search_range)
-        ].reset_index(drop=True)
-        BatchMatch.search_df_not_matched = BatchMatch.search_df.copy()
-        BatchMatch.search_df_cleaned = BatchMatch.search_df_cleaned[
-            BatchMatch.search_df_cleaned.index.isin(search_range)
-        ].reset_index(drop=True)
+        if use_postcode_blocker_effective:
+            _search_key = BatchMatch.search_df_key_field or "index"
+            BatchMatch.search_df = _slice_frame_by_normalized_keys(
+                BatchMatch.search_df, _search_key, list(search_range)
+            )
+            BatchMatch.search_df_not_matched = BatchMatch.search_df.copy()
+            BatchMatch.search_df_cleaned = _slice_frame_by_normalized_keys(
+                BatchMatch.search_df_cleaned, _search_key, list(search_range)
+            )
+            BatchMatch.search_df_after_stand = _slice_frame_by_normalized_keys(
+                BatchMatch.search_df_after_stand, _search_key, list(search_range)
+            )
+            BatchMatch.search_df_after_full_stand = _slice_frame_by_normalized_keys(
+                BatchMatch.search_df_after_full_stand,
+                _search_key,
+                list(search_range),
+            )
+        else:
+            # Street-only: `search_range` is a list of integer **positions** (see
+            # `create_street_batch_ranges`). All search-side frames share row order
+            # and length with `search_df_cleaned`.
+            _pos = list(search_range)
+            BatchMatch.search_df = BatchMatch.search_df.iloc[_pos].reset_index(
+                drop=True
+            )
+            BatchMatch.search_df_not_matched = BatchMatch.search_df.copy()
+            BatchMatch.search_df_cleaned = BatchMatch.search_df_cleaned.iloc[
+                _pos
+            ].reset_index(drop=True)
+            BatchMatch.search_df_after_stand = BatchMatch.search_df_after_stand.iloc[
+                _pos
+            ].reset_index(drop=True)
+            BatchMatch.search_df_after_full_stand = (
+                BatchMatch.search_df_after_full_stand.iloc[_pos].reset_index(drop=True)
+            )
 
-        BatchMatch.ref_df = BatchMatch.ref_df[
-            BatchMatch.ref_df.index.isin(ref_range)
-        ].reset_index(drop=True)
-        BatchMatch.ref_df_cleaned = BatchMatch.ref_df_cleaned[
-            BatchMatch.ref_df_cleaned.index.isin(ref_range)
-        ].reset_index(drop=True)
+        if use_postcode_blocker_effective:
+            _ref_key = "ref_index" if "ref_index" in BatchMatch.ref_df.columns else None
+            BatchMatch.ref_df = _slice_frame_by_normalized_keys(
+                BatchMatch.ref_df, _ref_key, list(ref_range)
+            )
+            BatchMatch.ref_df_cleaned = _slice_frame_by_normalized_keys(
+                BatchMatch.ref_df_cleaned, _ref_key, list(ref_range)
+            )
+            BatchMatch.ref_df_after_stand = _slice_frame_by_normalized_keys(
+                BatchMatch.ref_df_after_stand, _ref_key, list(ref_range)
+            )
+            BatchMatch.ref_df_after_full_stand = _slice_frame_by_normalized_keys(
+                BatchMatch.ref_df_after_full_stand, _ref_key, list(ref_range)
+            )
+        else:
+            BatchMatch.ref_df = BatchMatch.ref_df[
+                BatchMatch.ref_df.index.isin(ref_range)
+            ].reset_index(drop=True)
+            BatchMatch.ref_df_cleaned = BatchMatch.ref_df_cleaned[
+                BatchMatch.ref_df_cleaned.index.isin(ref_range)
+            ].reset_index(drop=True)
+            BatchMatch.ref_df_after_stand = BatchMatch.ref_df_after_stand[
+                BatchMatch.ref_df_after_stand.index.isin(ref_range)
+            ].reset_index(drop=True)
+            BatchMatch.ref_df_after_full_stand = BatchMatch.ref_df_after_full_stand[
+                BatchMatch.ref_df_after_full_stand.index.isin(ref_range)
+            ].reset_index(drop=True)
 
-        BatchMatch.search_df_after_stand = BatchMatch.search_df_after_stand[
-            BatchMatch.search_df_after_stand.index.isin(search_range)
-        ].reset_index(drop=True)
-        BatchMatch.search_df_after_full_stand = BatchMatch.search_df_after_full_stand[
-            BatchMatch.search_df_after_full_stand.index.isin(search_range)
-        ].reset_index(drop=True)
-        BatchMatch.ref_df_after_stand = BatchMatch.ref_df_after_stand[
-            BatchMatch.ref_df_after_stand.index.isin(ref_range)
-        ].reset_index(drop=True)
-        BatchMatch.ref_df_after_full_stand = BatchMatch.ref_df_after_full_stand[
-            BatchMatch.ref_df_after_full_stand.index.isin(ref_range)
-        ].reset_index(drop=True)
+        batch_inputs.append((row, BatchMatch, use_postcode_blocker_effective))
 
-        batch_inputs.append((row, BatchMatch))
+    pc_batch_count = len(batch_inputs)
+    overflow_range_df: Optional[pd.DataFrame] = None
+    overflow_uncovered_n: Optional[int] = None
+    if use_postcode_blocker_effective and _street_overflow_unbatched_search_enabled():
+        _cov = _postcode_batch_covered_search_keys_normalized(range_df)
+        _uncovered_vals = _uncovered_search_key_values_for_street_overflow(
+            InitMatch, _cov
+        )
+        if _uncovered_vals:
+            OverflowInit = _matcher_search_side_sliced_to_keys(
+                InitMatch, _uncovered_vals
+            )
+            if not OverflowInit.search_df.empty:
+                overflow_range_df = create_street_batch_ranges(
+                    OverflowInit.search_df_cleaned.copy(),
+                    InitMatch.ref_df_cleaned.copy(),
+                    batch_size,
+                )
+                overflow_uncovered_n = len(_uncovered_vals)
+                _n_ov = int(overflow_range_df.shape[0])
+                if _fuzzy_match_debug_enabled():
+                    print(
+                        "[FUZZY_MATCH_DEBUG] street overflow: "
+                        f"uncovered_rows={overflow_uncovered_n} overflow_batches={_n_ov}"
+                    )
+                for ov_row in range(_n_ov):
+                    search_range = overflow_range_df.iloc[ov_row]["search_range"]
+                    ref_range = overflow_range_df.iloc[ov_row]["ref_range"]
+                    BatchMatch = copy.copy(OverflowInit)
+                    _pos = list(search_range)
+                    BatchMatch.search_df = BatchMatch.search_df.iloc[_pos].reset_index(
+                        drop=True
+                    )
+                    BatchMatch.search_df_not_matched = BatchMatch.search_df.copy()
+                    BatchMatch.search_df_cleaned = BatchMatch.search_df_cleaned.iloc[
+                        _pos
+                    ].reset_index(drop=True)
+                    BatchMatch.search_df_after_stand = (
+                        BatchMatch.search_df_after_stand.iloc[_pos].reset_index(
+                            drop=True
+                        )
+                    )
+                    BatchMatch.search_df_after_full_stand = (
+                        BatchMatch.search_df_after_full_stand.iloc[_pos].reset_index(
+                            drop=True
+                        )
+                    )
+                    BatchMatch.ref_df = BatchMatch.ref_df[
+                        BatchMatch.ref_df.index.isin(ref_range)
+                    ].reset_index(drop=True)
+                    BatchMatch.ref_df_cleaned = BatchMatch.ref_df_cleaned[
+                        BatchMatch.ref_df_cleaned.index.isin(ref_range)
+                    ].reset_index(drop=True)
+                    BatchMatch.ref_df_after_stand = BatchMatch.ref_df_after_stand[
+                        BatchMatch.ref_df_after_stand.index.isin(ref_range)
+                    ].reset_index(drop=True)
+                    BatchMatch.ref_df_after_full_stand = (
+                        BatchMatch.ref_df_after_full_stand[
+                            BatchMatch.ref_df_after_full_stand.index.isin(ref_range)
+                        ].reset_index(drop=True)
+                    )
+                    batch_inputs.append((pc_batch_count + ov_row, BatchMatch, False))
 
+    _print_batches_to_run_overview(
+        range_df,
+        use_postcode_mode=use_postcode_blocker_effective,
+        overflow_range_df=overflow_range_df,
+    )
+    if overflow_uncovered_n is not None and overflow_range_df is not None:
+        _n_ov = int(overflow_range_df.shape[0])
+        print(
+            "Street-only overflow: "
+            f"{overflow_uncovered_n} search row(s) were not in any postcode-overlap batch; "
+            f"running {_n_ov} extra batch(es) against the full reference "
+            "(postcode blocking off for these batches). "
+            "Set STREET_OVERFLOW_UNBATCHED_SEARCH=0 to skip."
+        )
+
+    number_of_batches = len(batch_inputs)
     run_parallel = bool(run_batches_in_parallel) and number_of_batches > 1
     if run_parallel:
         try:
@@ -2296,10 +2640,10 @@ def fuzzy_address_match(
                         batch_n,
                         batch_match,
                         number_of_batches,
-                        use_postcode_blocker_effective,
+                        use_pc,
                         print_match_stage_summary_to_console,
                     )
-                    for batch_n, batch_match in batch_inputs
+                    for batch_n, batch_match, use_pc in batch_inputs
                 ]
 
                 for future in progress.tqdm(
@@ -2328,7 +2672,7 @@ def fuzzy_address_match(
             run_parallel = False
 
     if not run_parallel:
-        for batch_n, BatchMatch in progress.tqdm(
+        for batch_n, BatchMatch, use_pc in progress.tqdm(
             batch_inputs,
             desc="Matching addresses in batches",
             unit="batches",
@@ -2340,19 +2684,41 @@ def fuzzy_address_match(
                 out_message = "Nothing to match for batch: " + str(batch_n)
                 print(out_message)
                 BatchMatch_out = BatchMatch
-                BatchMatch_out.results_on_orig_df = pd.DataFrame(
-                    data={
-                        "index": BatchMatch.search_df.index,
-                        "Excluded from search": False,
-                        "Matched with reference address": False,
-                    }
-                )
+                _batch_key = getattr(BatchMatch, "search_df_key_field", None) or "index"
+                if (
+                    not BatchMatch.search_df.empty
+                    and _batch_key in BatchMatch.search_df.columns
+                ):
+                    _sdf = BatchMatch.search_df
+                    _excl = (
+                        _sdf["Excluded from search"]
+                        if "Excluded from search" in _sdf.columns
+                        else "Included in search"
+                    )
+                    BatchMatch_out.results_on_orig_df = pd.DataFrame(
+                        {
+                            _batch_key: _sdf[_batch_key],
+                            "Excluded from search": _excl,
+                            "Matched with reference address": False,
+                        }
+                    )
+                    BatchMatch_out.match_results_output = pd.DataFrame(
+                        {
+                            _batch_key: _sdf[_batch_key].astype(str),
+                            "full_match": False,
+                        }
+                    )
+                else:
+                    BatchMatch_out.results_on_orig_df = pd.DataFrame()
+                    BatchMatch_out.match_results_output = pd.DataFrame(
+                        columns=[_batch_key, "full_match"]
+                    )
             else:
                 summary_of_summaries, BatchMatch_out = run_single_match_batch(
                     BatchMatch,
                     batch_n,
                     number_of_batches,
-                    use_postcode_blocker=use_postcode_blocker_effective,
+                    use_postcode_blocker=use_pc,
                     write_outputs=SAVE_INTERIM_FILES,
                     print_match_stage_summary_to_console=print_match_stage_summary_to_console,
                 )
@@ -2843,10 +3209,15 @@ def create_street_batch_ranges(
     Create search batches that compare against the full reference index list.
     Used when postcode blocking is disabled/unavailable.
     """
-    search_indexes = df.index.tolist()
+    # Use **positional** row indices (0..n-1), not `df.index` labels. After
+    # `prepare_search_address`, `search_df_cleaned` often has a default RangeIndex
+    # while `InitMatch.search_df` keeps the original file/filter index; batching
+    # on cleaned index labels and then `.index.isin(...)` on `search_df` yields
+    # empty batches.
+    n_search = len(df)
     ref_indexes = ref_df.index.tolist()
 
-    if not search_indexes:
+    if n_search == 0:
         return pd.DataFrame(
             data={
                 "search_range": [[]],
@@ -2857,8 +3228,8 @@ def create_street_batch_ranges(
         )
 
     search_chunks = [
-        search_indexes[i : i + batch_size]
-        for i in range(0, len(search_indexes), batch_size)
+        list(range(i, min(i + batch_size, n_search)))
+        for i in range(0, n_search, batch_size)
     ]
     out_df = pd.DataFrame(
         data={
@@ -2879,10 +3250,32 @@ def create_batch_ranges(
     ref_batch_size: int,
     search_postcode_col: str,
     ref_postcode_col: str,
+    search_df_key_field: Optional[str] = None,
+    ref_key_field: Optional[str] = None,
 ):
     """
     Create batches of address indexes for search and reference dataframes based on shortened postcodes.
     """
+
+    _search_k = search_df_key_field or "index"
+    _ref_k = ref_key_field or "ref_index"
+
+    def _batch_id_series(side: pd.DataFrame, key_field: str) -> pd.Series:
+        if key_field in side.columns:
+            ser = _resolve_column_series(side, key_field)
+            if ser is not None:
+                return ser
+        return pd.Series(side.index, index=side.index)
+
+    def _clean_postcode_minus_last(series: pd.Series) -> pd.Series:
+        return (
+            series.fillna("")
+            .astype(str)
+            .str.lower()
+            .str.strip()
+            .str.replace(r"\s+", "", regex=True)
+            .str[:-1]
+        )
 
     # If df sizes are smaller than the batch size limits, no need to run through everything
     if len(df) < batch_size and len(ref_df) < ref_batch_size:
@@ -2891,8 +3284,8 @@ def create_batch_ranges(
         )
         lengths_df = pd.DataFrame(
             data={
-                "search_range": [df.index.tolist()],
-                "ref_range": [ref_df.index.tolist()],
+                "search_range": [_batch_id_series(df, _search_k).tolist()],
+                "ref_range": [_batch_id_series(ref_df, _ref_k).tolist()],
                 "batch_length": len(df),
                 "ref_length": len(ref_df),
             }
@@ -2901,24 +3294,68 @@ def create_batch_ranges(
 
     # df.index = df[search_postcode_col]
 
-    df["index"] = df.index
-    ref_df["index"] = ref_df.index
+    df["index"] = _batch_id_series(df, _search_k)
+    ref_df["index"] = _batch_id_series(ref_df, _ref_k)
 
     # Remove the last character of postcode
-    df["postcode_minus_last_character"] = (
+    df["postcode_minus_last_character"] = _clean_postcode_minus_last(
         df[search_postcode_col]
-        .str.lower()
-        .str.strip()
-        .str.replace(r"\s+", "", regex=True)
-        .str[:-1]
     )
-    ref_df["postcode_minus_last_character"] = (
+    ref_df["postcode_minus_last_character"] = _clean_postcode_minus_last(
         ref_df[ref_postcode_col]
-        .str.lower()
-        .str.strip()
-        .str.replace(r"\s+", "", regex=True)
-        .str[:-1]
     )
+
+    # ---- Explain why some eligible search rows are not batched ----
+    # Postcode batching only considers postcodes with length >= 4 (after removing spaces and last char)
+    # and only builds batches for postcode groups that exist in BOTH search and reference.
+    try:
+        _search_total = len(df)
+        _ref_total = len(ref_df)
+        _s_pc = df["postcode_minus_last_character"].fillna("").astype(str)
+        _r_pc = ref_df["postcode_minus_last_character"].fillna("").astype(str)
+        _s_ok = _s_pc.str.len().ge(4)
+        _r_ok = _r_pc.str.len().ge(4)
+
+        _search_rows_short_or_blank = int((~_s_ok).sum())
+        _ref_rows_short_or_blank = int((~_r_ok).sum())
+        _search_rows_eligible = int(_s_ok.sum())
+        _ref_rows_eligible = int(_r_ok.sum())
+
+        _s_counts = _s_pc[_s_ok].value_counts(dropna=False)
+        _r_counts = _r_pc[_r_ok].value_counts(dropna=False)
+        _s_postcodes = set(_s_counts.index.tolist())
+        _r_postcodes = set(_r_counts.index.tolist())
+        _common_postcodes = _s_postcodes.intersection(_r_postcodes)
+
+        _search_rows_in_common = (
+            int(_s_counts.loc[list(_common_postcodes)].sum())
+            if _common_postcodes
+            else 0
+        )
+        _search_rows_not_in_ref = _search_rows_eligible - _search_rows_in_common
+
+        if _fuzzy_match_debug_enabled():
+            print("[FUZZY_MATCH_DEBUG] batch planning (postcode mode)")
+            print(
+                f"  search rows total={_search_total} "
+                f"eligible_postcode_rows={_search_rows_eligible} "
+                f"short_or_blank_postcode_rows={_search_rows_short_or_blank}"
+            )
+            print(
+                f"  ref rows total={_ref_total} "
+                f"eligible_postcode_rows={_ref_rows_eligible} "
+                f"short_or_blank_postcode_rows={_ref_rows_short_or_blank}"
+            )
+            print(
+                f"  unique truncated postcodes: search={len(_s_postcodes)} "
+                f"ref={len(_r_postcodes)} common={len(_common_postcodes)}"
+            )
+            print(
+                f"  search rows with eligible truncated postcode NOT in reference={_search_rows_not_in_ref}"
+            )
+    except Exception:
+        # Never fail the run due to debug stats.
+        pass
 
     unique_postcodes = (
         df["postcode_minus_last_character"][
@@ -2963,25 +3400,18 @@ def create_batch_ranges(
                 # print("Batch length reached - breaking")
                 break
 
-            try:
-                current_postcode_search_data_add = df.loc[
-                    [current_postcode]
-                ]  # [df['postcode_minus_last_character'].isin(current_postcode)]
-                current_postcode_ref_data_add = ref_df.loc[
-                    [current_postcode]
-                ]  # [ref_df['postcode_minus_last_character'].isin(current_postcode)]
-
-                # print(current_postcode_search_data_add)
+            # Only batch postcode groups that exist in BOTH search and reference.
+            # If a truncated postcode is only present on the search side, it will
+            # not be attempted in postcode-blocked matching (it may still be
+            # matchable via street-only fallback elsewhere).
+            if (current_postcode in df.index) and (current_postcode in ref_df.index):
+                current_postcode_search_data_add = df.loc[[current_postcode]]
+                current_postcode_ref_data_add = ref_df.loc[[current_postcode]]
 
                 if not current_postcode_search_data_add.empty:
                     current_batch.extend(current_postcode_search_data_add["index"])
-
                 if not current_postcode_ref_data_add.empty:
                     current_ref_batch.extend(current_postcode_ref_data_add["index"])
-
-            except Exception:
-                # print("postcode not found: ", current_postcode)
-                pass
 
             unique_postcodes_iterator.remove(current_postcode)
 
@@ -3010,7 +3440,75 @@ def create_batch_ranges(
         }
     )
 
+    # Report coverage: how many eligible search rows were actually assigned to batches.
+    try:
+        if _fuzzy_match_debug_enabled():
+            _all_search_keys = set()
+            for chunk in batch_indexes:
+                _all_search_keys.update(chunk)
+            print(
+                "[FUZZY_MATCH_DEBUG] batch planning coverage (postcode mode)\n"
+                f"  batches={len(batch_indexes)} "
+                f"search rows covered by batches={len(_all_search_keys)} "
+                f"of total search rows={len(df)}"
+            )
+    except Exception:
+        pass
+
     return lengths_df
+
+
+def _print_batches_to_run_overview(
+    range_df: pd.DataFrame,
+    *,
+    use_postcode_mode: bool,
+    overflow_range_df: Optional[pd.DataFrame],
+) -> None:
+    """
+    Console table of all batches: postcode and/or street, plus optional street-overflow
+    chunks (search rows not in any postcode-overlap batch).
+    """
+    try:
+        rows_out: List[dict] = []
+        for i in range(range_df.shape[0]):
+            r = range_df.iloc[i]
+            sr = r["search_range"]
+            rr = r["ref_range"]
+            rows_out.append(
+                {
+                    "batch_type": "postcode" if use_postcode_mode else "street",
+                    "search_range_summary": _summarise_index_list(sr),
+                    "batch_length": r.get("batch_length", len(list(sr))),
+                    "ref_range_summary": _summarise_index_list(rr),
+                    "ref_length": r.get("ref_length", len(list(rr))),
+                }
+            )
+        if overflow_range_df is not None and not overflow_range_df.empty:
+            for j in range(overflow_range_df.shape[0]):
+                r = overflow_range_df.iloc[j]
+                sr = r["search_range"]
+                rr = r["ref_range"]
+                rows_out.append(
+                    {
+                        "batch_type": "street_overflow",
+                        "search_range_summary": _summarise_index_list(sr),
+                        "batch_length": r.get("batch_length", len(list(sr))),
+                        "ref_range_summary": _summarise_index_list(rr),
+                        "ref_length": r.get("ref_length", len(list(rr))),
+                    }
+                )
+        overview = pd.DataFrame(rows_out)
+        cols = [
+            "batch_type",
+            "search_range_summary",
+            "batch_length",
+            "ref_range_summary",
+            "ref_length",
+        ]
+        print("Batches to run in this session:")
+        print(overview[cols].to_string(index=True))
+    except Exception:
+        print("Batches to run in this session: ", range_df)
 
 
 def _summarise_index_list(values) -> str:
@@ -3275,6 +3773,7 @@ def orchestrate_single_match_batch(
 
     # print(Matcher.standardise)
     Matcher.standardise = standardise
+    retain_prior_fuzzy_outputs = False
 
     if Matcher.search_df_not_matched.empty:
         print("Nothing to match! At start of preparing run.")
@@ -3314,10 +3813,18 @@ def orchestrate_single_match_batch(
             pre_filter_search_df=getattr(Matcher, "pre_filter_search_df", None),
         )
         if match_results_output.empty:
-            print("Match results empty")
-            Matcher.abort_flag = True
-            return Matcher
-
+            _prior = Matcher.match_results_output
+            _prior_nonempty = isinstance(_prior, pd.DataFrame) and not _prior.empty
+            if standardise and _prior_nonempty:
+                print(
+                    "Standardised fuzzy produced no new match rows; retaining prior fuzzy outputs."
+                )
+                Matcher.abort_flag = False
+                retain_prior_fuzzy_outputs = True
+            else:
+                print("Match results empty")
+                Matcher.abort_flag = True
+                return Matcher
         else:
             Matcher.diag_shortlist = diag_shortlist
             Matcher.diag_best_match = diag_best_match
@@ -3372,8 +3879,9 @@ def orchestrate_single_match_batch(
             Matcher.predict_df_nnet = predict_df_nnet
 
     # Save to file
-    Matcher.results_on_orig_df = results_on_orig_df
-    Matcher.summary = summary
+    if nnet or (not retain_prior_fuzzy_outputs):
+        Matcher.results_on_orig_df = results_on_orig_df
+        Matcher.summary = summary
     Matcher.output_summary = create_match_summary(
         Matcher.match_results_output, df_name=df_name
     )
@@ -3457,18 +3965,40 @@ def full_fuzzy_match(
         and _column_has_usable_values(search_df_after_stand, "postcode_search")
         and _column_has_usable_values(ref_df_after_stand, "postcode_search")
     )
+    _log_postcode_blocker_debug(
+        standardise=standardise,
+        use_postcode_blocker=use_postcode_blocker,
+        search_df_after_stand=search_df_after_stand,
+        ref_df_after_stand=ref_df_after_stand,
+        can_run_postcode_blocker=can_run_postcode_blocker,
+    )
 
     if can_run_postcode_blocker:
         # Exclude blank postcodes from postcode-blocked matching.
         # (They can still be considered later in street-blocked matching.)
+        _s_pc = _resolve_column_series(search_df_after_stand, "postcode_search")
+        _r_pc = _resolve_column_series(ref_df_after_stand, "postcode_search")
         search_pc = (
-            search_df_after_stand["postcode_search"].fillna("").astype(str).str.strip()
+            _s_pc.fillna("").astype(str).str.strip()
+            if _s_pc is not None
+            else pd.Series("", index=search_df_after_stand.index)
         )
         ref_pc = (
-            ref_df_after_stand["postcode_search"].fillna("").astype(str).str.strip()
+            _r_pc.fillna("").astype(str).str.strip()
+            if _r_pc is not None
+            else pd.Series("", index=ref_df_after_stand.index)
         )
         search_df_after_stand_pc = search_df_after_stand.loc[search_pc.ne("")].copy()
         ref_df_after_stand_pc = ref_df_after_stand.loc[ref_pc.ne("")].copy()
+
+        search_df_after_stand_pc = add_fuzzy_block_sequence_col(
+            search_df_after_stand_pc, "postcode_search"
+        )
+        search_df_after_stand = search_df_after_stand.copy()
+        search_df_after_stand["_fuzzy_block_seq"] = np.nan
+        search_df_after_stand.loc[
+            search_df_after_stand_pc.index, "_fuzzy_block_seq"
+        ] = search_df_after_stand_pc["_fuzzy_block_seq"].values
 
         search_df_after_stand_series = search_df_after_stand_pc.set_index(
             "postcode_search"
@@ -3641,6 +4171,10 @@ def full_fuzzy_match(
     search_df_after_stand_street = search_df_after_stand_street.loc[
         ~no_street_extracted
     ].copy()
+
+    search_df_after_stand_street = add_fuzzy_block_sequence_col(
+        search_df_after_stand_street, "street"
+    )
 
     ### Create lookup lists
     search_df_match_series_street = search_df_after_stand_street.copy().set_index(
@@ -4188,18 +4722,16 @@ def combine_two_matches(
     # (e.g. cache from a previous run). Positional masks then raise:
     # "Boolean index has wrong length".
     _key = NewMatchClass.search_df_key_field
-    _keep_keys = set(
-        NewMatchClass.search_df_not_matched.get(_key, pd.Series(dtype=object))
-        .astype(str)
-        .tolist()
-    )
+    _nm = NewMatchClass.search_df_not_matched.get(_key, pd.Series(dtype=object))
+    _keep_keys = set(_normalize_join_key_strings(_nm).tolist())
 
     def _filter_by_keys(df: pd.DataFrame) -> pd.DataFrame:
         if df is None or df.empty:
             return df
         if _key not in df.columns:
             return df
-        return df.loc[df[_key].astype(str).isin(_keep_keys), :].copy()
+        df_keys = _normalize_join_key_strings(df[_key])
+        return df.loc[df_keys.isin(_keep_keys), :].copy()
 
     NewMatchClass.search_df_cleaned = _filter_by_keys(NewMatchClass.search_df_cleaned)
     NewMatchClass.search_df_after_stand = _filter_by_keys(
@@ -4254,12 +4786,18 @@ def combine_two_matches(
         )
 
     # Drop any duplicates, prioritise any matches
-    NewMatchClass.results_on_orig_df["index"] = NewMatchClass.results_on_orig_df[
-        "index"
-    ].astype(int, errors="ignore")
-    NewMatchClass.results_on_orig_df["ref_index"] = NewMatchClass.results_on_orig_df[
-        "ref_index"
-    ].astype(int, errors="ignore")
+    if "index" in NewMatchClass.results_on_orig_df.columns:
+        NewMatchClass.results_on_orig_df["index"] = NewMatchClass.results_on_orig_df[
+            "index"
+        ].astype(int, errors="ignore")
+    # `combine_dfs_and_remove_dups` can leave only pre-filter rows if the incoming
+    # `results_on_orig_df` was empty or never carried match columns (no `ref_index`).
+    if "ref_index" in NewMatchClass.results_on_orig_df.columns:
+        NewMatchClass.results_on_orig_df["ref_index"] = (
+            NewMatchClass.results_on_orig_df["ref_index"].astype(int, errors="ignore")
+        )
+    else:
+        NewMatchClass.results_on_orig_df["ref_index"] = pd.NA
 
     NewMatchClass.results_on_orig_df = NewMatchClass.results_on_orig_df.sort_values(
         by=["index", "Matched with reference address"], ascending=[True, False]
