@@ -109,6 +109,9 @@ from fuzzy_address_matcher.config import (
     output_folder,
     ref_batch_size,
 )
+from fuzzy_address_matcher.config import (
+    fuzzy_match_limit as config_fuzzy_match_limit,
+)
 from fuzzy_address_matcher.constants import (
     InitMatch,
     MatcherClass,
@@ -1839,6 +1842,8 @@ def fuzzy_address_match(
     in_api: Optional[str] = None,
     in_api_key: Optional[str] = None,
     use_postcode_blocker: bool = USE_POSTCODE_BLOCKER,
+    fuzzy_match_limit: Optional[Union[int, float]] = None,
+    run_street_matching: bool = True,
     output_folder: Optional[str] = None,
     save_output_files: bool = SAVE_OUTPUT_FILES,
     print_match_stage_summary_to_console: bool = PRINT_MATCH_STAGE_SUMMARY_TO_CONSOLE,
@@ -1892,6 +1897,12 @@ def fuzzy_address_match(
         in_api: API mode / query type. If falsy, the reference data is loaded from `in_ref`.
         in_api_key: API key used when `in_api` is provided.
         use_postcode_blocker: If True, apply postcode-based blocking to reduce candidate comparisons.
+        fuzzy_match_limit: Minimum RapidFuzz score (0–100) used as ``score_cutoff`` during
+            blocked fuzzy comparison and for ``fuzzy_score_match`` in diagnostics. When omitted,
+            uses ``fuzzy_match_limit`` from config / environment.
+        run_street_matching: When postcode blocking is in use, also run the street-blocked fuzzy
+            pass for rows that are not fully matched after postcode. Ignored when postcode blocking
+            is off (street-only matching still runs as the primary pass).
         output_folder: Optional override for the output folder.
         save_output_files: If True, save final output CSV files (results/diagnostics/summary).
         print_match_stage_summary_to_console: If True, print per-stage match statistics
@@ -1972,10 +1983,26 @@ def fuzzy_address_match(
             out_path = out_path + os.sep
         return out_path
 
+    if not use_postcode_blocker and not run_street_matching:
+        raise ValueError(
+            "Neither postcode blocking nor street-based matching is enabled. Please enable at least one matching method to proceed."
+        )
+
     effective_output_folder = _resolve_output_folder_within_base(
         OUTPUT_FOLDER, output_folder
     )
     InitMatch.output_folder = effective_output_folder
+
+    if fuzzy_match_limit is None:
+        _fuzzy_lim = int(config_fuzzy_match_limit)
+    else:
+        try:
+            _fuzzy_lim = int(round(float(fuzzy_match_limit)))
+        except (TypeError, ValueError):
+            _fuzzy_lim = int(config_fuzzy_match_limit)
+    _fuzzy_lim = max(0, min(100, _fuzzy_lim))
+    InitMatch.fuzzy_match_limit = _fuzzy_lim
+    InitMatch.run_street_matching = bool(run_street_matching)
 
     def _notify_ui(level: str, message: str) -> None:
         """
@@ -2294,7 +2321,7 @@ def fuzzy_address_match(
             )
             _loaded_min_s = True
             print(
-                f"Loaded minimal search standardisation from cache:\n  {os.path.basename(_path_min_s)}"
+                f"Loaded minimal search standardisation from cache: {os.path.basename(_path_min_s)}"
             )
         else:
             print(
@@ -2328,7 +2355,7 @@ def fuzzy_address_match(
             )
             _loaded_min_r = True
             print(
-                f"Loaded minimal reference standardisation from cache:\n  {os.path.basename(_path_min_r)}"
+                f"Loaded minimal reference standardisation from cache: {os.path.basename(_path_min_r)}"
             )
         else:
             print(
@@ -2381,7 +2408,7 @@ def fuzzy_address_match(
             )
             _loaded_full_s = True
             print(
-                f"Loaded full search standardisation from cache:\n  {os.path.basename(_path_full_s)}"
+                f"Loaded full search standardisation from cache: {os.path.basename(_path_full_s)}"
             )
         else:
             print(
@@ -2415,7 +2442,7 @@ def fuzzy_address_match(
             )
             _loaded_full_r = True
             print(
-                f"Loaded full reference standardisation from cache:\n  {os.path.basename(_path_full_r)}"
+                f"Loaded full reference standardisation from cache: {os.path.basename(_path_full_r)}"
             )
         else:
             print(
@@ -2548,7 +2575,11 @@ def fuzzy_address_match(
     pc_batch_count = len(batch_inputs)
     overflow_range_df: Optional[pd.DataFrame] = None
     overflow_uncovered_n: Optional[int] = None
-    if use_postcode_blocker_effective and _street_overflow_unbatched_search_enabled():
+    if (
+        use_postcode_blocker_effective
+        and _street_overflow_unbatched_search_enabled()
+        and bool(getattr(InitMatch, "run_street_matching", True))
+    ):
         _cov = _postcode_batch_covered_search_keys_normalized(range_df)
         _uncovered_vals = _uncovered_search_key_values_for_street_overflow(
             InitMatch, _cov
@@ -2625,11 +2656,18 @@ def fuzzy_address_match(
 
     number_of_batches = len(batch_inputs)
     run_parallel = bool(run_batches_in_parallel) and number_of_batches > 1
+    worker_count = 1
+    if run_parallel:
+        worker_count = _resolve_parallel_worker_count(
+            number_of_batches, max_parallel_workers, includes_nnet=run_nnet_match
+        )
+        # ProcessPoolExecutor still spawns subprocesses when max_workers==1; run in-process
+        # instead so MAX_PARALLEL_WORKERS=1 avoids Windows spawn/__main__ footguns.
+        if worker_count < 2:
+            run_parallel = False
+
     if run_parallel:
         try:
-            worker_count = _resolve_parallel_worker_count(
-                number_of_batches, max_parallel_workers, includes_nnet=run_nnet_match
-            )
             print(f"Running batches in parallel with {worker_count} worker processes")
             future_results = []
 
@@ -3584,6 +3622,7 @@ def run_single_match_batch(
             df_name=df_name,
             use_postcode_blocker=use_postcode_blocker,
             write_outputs=write_outputs,
+            show_block_progress=show_progress,
         )
 
         if FuzzyNotStdMatch.abort_flag:
@@ -3637,6 +3676,7 @@ def run_single_match_batch(
             df_name=df_name,
             use_postcode_blocker=use_postcode_blocker,
             write_outputs=write_outputs,
+            show_block_progress=show_progress,
         )
         FuzzyStdMatch = combine_two_matches(
             FuzzyNotStdMatch,
@@ -3688,6 +3728,7 @@ def run_single_match_batch(
             file_stub="nnet_not_std_",
             df_name=df_name,
             write_outputs=write_outputs,
+            show_block_progress=show_progress,
         )
         FuzzyNNetNotStdMatch = combine_two_matches(
             FuzzyStdMatch,
@@ -3725,6 +3766,7 @@ def run_single_match_batch(
             file_stub="nnet_std_",
             df_name=df_name,
             write_outputs=write_outputs,
+            show_block_progress=show_progress,
         )
         FuzzyNNetStdMatch = combine_two_matches(
             FuzzyNNetNotStdMatch,
@@ -3767,6 +3809,7 @@ def orchestrate_single_match_batch(
     df_name="Fuzzy not standardised",
     use_postcode_blocker: bool = True,
     write_outputs: bool = True,
+    show_block_progress: bool = True,
 ):
 
     today_rev = datetime.now().strftime("%Y%m%d")
@@ -3809,8 +3852,10 @@ def orchestrate_single_match_batch(
             Matcher.fuzzy_scorer_used,
             Matcher.new_join_col,
             use_postcode_blocker=use_postcode_blocker,
+            run_street_matching=getattr(Matcher, "run_street_matching", True),
             existing_match_col=_existing_col,
             pre_filter_search_df=getattr(Matcher, "pre_filter_search_df", None),
+            show_block_progress=show_block_progress,
         )
         if match_results_output.empty:
             _prior = Matcher.match_results_output
@@ -3929,8 +3974,10 @@ def full_fuzzy_match(
     fuzzy_search_addr_limit: float = 100,
     filter_to_lambeth_pcodes: bool = False,
     use_postcode_blocker: bool = True,
+    run_street_matching: bool = True,
     existing_match_col: Optional[str] = None,
     pre_filter_search_df: Optional[PandasDataFrame] = None,
+    show_block_progress: bool = True,
 ):
     """
     Compare addresses in a 'search address' dataframe with a 'reference address' dataframe by using fuzzy matching from the rapidfuzz package, blocked by postcode and then street.
@@ -3965,6 +4012,7 @@ def full_fuzzy_match(
         and _column_has_usable_values(search_df_after_stand, "postcode_search")
         and _column_has_usable_values(ref_df_after_stand, "postcode_search")
     )
+    postcode_blocking_in_use = bool(can_run_postcode_blocker)
     _log_postcode_blocker_debug(
         standardise=standardise,
         use_postcode_blocker=use_postcode_blocker,
@@ -4030,6 +4078,8 @@ def full_fuzzy_match(
                 reference_address_series=ref_df_after_stand_series_checked,
                 search_limit=fuzzy_search_addr_limit,
                 scorer_name=fuzzy_scorer_used,
+                fuzzy_match_limit=fuzzy_match_limit,
+                show_progress=show_block_progress,
             )
 
             time.perf_counter()
@@ -4088,6 +4138,45 @@ def full_fuzzy_match(
         else:
             results_on_orig_df = match_results_output
 
+        return (
+            diag_shortlist,
+            diag_best_match,
+            match_results_output,
+            results_on_orig_df,
+            summary,
+            search_address_cols,
+        )
+
+    if (not run_street_matching) and postcode_blocking_in_use:
+        if match_results_output.empty:
+            out_msg = (
+                "Street-based matching is disabled and there are no postcode-blocked "
+                "fuzzy results (e.g. no overlapping postcode groups). "
+                "Enable street-based matching or check postcode overlap between search and reference."
+            )
+            print(out_msg)
+            return (
+                diag_shortlist,
+                diag_best_match,
+                match_results_output,
+                pd.DataFrame(),
+                out_msg,
+                search_address_cols,
+            )
+        summary = create_match_summary(match_results_output, df_name)
+        if not isinstance(search_df, str):
+            results_on_orig_df = create_results_df(
+                match_results_output,
+                search_df_cleaned,
+                search_df_key_field,
+                new_join_col,
+                ref_df_cleaned=ref_df_cleaned,
+                existing_match_col=existing_match_col,
+                pre_filter_search_df=pre_filter_search_df,
+            )
+        else:
+            results_on_orig_df = match_results_output
+        print("Skipping street-based fuzzy matching (disabled).")
         return (
             diag_shortlist,
             diag_best_match,
@@ -4241,6 +4330,8 @@ def full_fuzzy_match(
         reference_address_series=ref_df_after_stand_series_street_checked.copy(),
         search_limit=fuzzy_search_addr_limit,
         scorer_name=fuzzy_scorer_used,
+        fuzzy_match_limit=fuzzy_match_limit,
+        show_progress=show_block_progress,
     )
 
     time.perf_counter()

@@ -308,6 +308,7 @@ class MatcherClass(BaseModel):
     # Fuzzy/general attributes
     fuzzy_scorer_used: str
     fuzzy_match_limit: int
+    run_street_matching: bool
     fuzzy_search_addr_limit: int
     filter_to_lambeth_pcodes: bool
     standardise: bool
@@ -393,6 +394,7 @@ InitMatch = MatcherClass(
     # Fuzzy/general attributes
     fuzzy_scorer_used=fuzzy_scorer_used,
     fuzzy_match_limit=fuzzy_match_limit,
+    run_street_matching=True,
     fuzzy_search_addr_limit=fuzzy_search_addr_limit,
     filter_to_lambeth_pcodes=filter_to_lambeth_pcodes,
     standardise=standardise,

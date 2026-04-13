@@ -2,6 +2,7 @@ import json
 import os
 import re
 import socket
+import sys
 import urllib.parse
 from datetime import datetime
 from pathlib import Path
@@ -320,9 +321,7 @@ APP_CONFIG_PATH = get_or_create_env_var(
 
 if APP_CONFIG_PATH:
     if os.path.exists(APP_CONFIG_PATH):
-        print(
-            f"Loading app variables from fuzzy_address_matcher config file {APP_CONFIG_PATH}"
-        )
+        print("Loading app variables from fuzzy_address_matcher config file")
         load_dotenv(APP_CONFIG_PATH)
     # else:
     #    print("App config file not found at location:", APP_CONFIG_PATH)
@@ -437,8 +436,13 @@ USE_POSTCODE_BLOCKER = convert_string_to_boolean(
 )
 
 MAX_PARALLEL_WORKERS = int(get_or_create_env_var("MAX_PARALLEL_WORKERS", "4"))
+# Windows uses the "spawn" start method: process pools re-import the user's main script.
+# Naive scripts without ``if __name__ == "__main__":`` then fail during bootstrap. Default
+# to sequential batching on Windows; set RUN_BATCHES_IN_PARALLEL=True to opt in (with a
+# proper main guard). Other platforms keep parallel batching by default.
+_DEFAULT_RUN_BATCHES_IN_PARALLEL = "False" if sys.platform == "win32" else "True"
 RUN_BATCHES_IN_PARALLEL = convert_string_to_boolean(
-    get_or_create_env_var("RUN_BATCHES_IN_PARALLEL", "True")
+    get_or_create_env_var("RUN_BATCHES_IN_PARALLEL", _DEFAULT_RUN_BATCHES_IN_PARALLEL)
 )
 
 SHOW_FEEDBACK = convert_string_to_boolean(

@@ -7,7 +7,12 @@ import pandas as pd
 from rapidfuzz import fuzz, process
 from tqdm import tqdm
 
-from fuzzy_address_matcher.config import fuzzy_match_limit, no_number_fuzzy_match_limit
+from fuzzy_address_matcher.config import (
+    fuzzy_match_limit as default_fuzzy_match_limit,
+)
+from fuzzy_address_matcher.config import (
+    no_number_fuzzy_match_limit,
+)
 
 PandasDataFrame = Type[pd.DataFrame]
 PandasSeries = Type[pd.Series]
@@ -129,6 +134,8 @@ def string_match_by_post_code_multiple(
     reference_address_series: PandasSeries,
     search_limit=100,
     scorer_name="token_set_ratio",
+    fuzzy_match_limit: Optional[float] = None,
+    show_progress: bool = True,
     progress=gr.Progress(track_tqdm=True),
 ) -> MatchedResults:
     """
@@ -143,6 +150,11 @@ def string_match_by_post_code_multiple(
     https://stackoverflow.com/questions/31806695/when-to-use-which-fuzz-function-to-compare-2-strings
 
     """
+    _score_cutoff = (
+        default_fuzzy_match_limit
+        if fuzzy_match_limit is None
+        else float(fuzzy_match_limit)
+    )
 
     def do_one_match(
         reference_addresses: pd.Series,
@@ -195,7 +207,7 @@ def string_match_by_post_code_multiple(
                     search_addresses.values,
                     [reference_addresses],
                     scorer=scorer,
-                    score_cutoff=fuzzy_match_limit,
+                    score_cutoff=_score_cutoff,
                     workers=-1,
                 )
 
@@ -209,7 +221,7 @@ def string_match_by_post_code_multiple(
                     search_addresses.values,
                     reference_addresses.values,
                     scorer=scorer,
-                    score_cutoff=fuzzy_match_limit,
+                    score_cutoff=_score_cutoff,
                     workers=-1,
                 )
 
@@ -272,7 +284,10 @@ def string_match_by_post_code_multiple(
     unique_postcodes = pd.unique(match_address_df["postcode_search"])
 
     for postcode_match in tqdm(
-        unique_postcodes, desc="Fuzzy matching", unit="blocks (postcodes or streets)"
+        unique_postcodes,
+        desc="Fuzzy matching",
+        unit="blocks (postcodes or streets)",
+        disable=not show_progress,
     ):
 
         postcode_match_list = [postcode_match]
@@ -711,7 +726,7 @@ def create_diagnostic_results(
     final_ref_address_col="ref_address_stand",
     orig_matched_address_col="full_address",
     orig_ref_address_col="fulladdress",
-    fuzzy_match_limit=fuzzy_match_limit,
+    fuzzy_match_limit=default_fuzzy_match_limit,
     blocker_col="Postcode",
     search_df_key_field: Optional[str] = None,
 ) -> PandasDataFrame:
